@@ -614,3 +614,185 @@ maxMap = Map.fromListWith max [(2,3), (2,5), (2,100), (3,29), (3,22), (3,11), (4
 -- 同じキーの値を足し合わせることもできる
 sumMap :: Map.Map Int Int
 sumMap = Map.fromListWith (+) [(2,3), (2,5), (2,100), (3,29), (3,22), (3,11), (4,22), (4,15)] -- fromList [(2,108),(3,62),(4,37)]
+
+-------------------------------
+-- モジュールを作ってみよう
+-------------------------------
+
+{-
+    プログラムを書くときに、似たような目的の関数と型をまとめてモジュールに分けるのは良い習慣である。
+    そうすれば、そのモジュールをインポートするだけで、それらの関数を他のプログラムから簡単に再利用できるようになる。
+
+    モジュールからは関数をエクスポートする。
+    モジュールをインポートすると、そのモジュールがエクスポートする関数が使えるようになる。
+    モジュールの内部で使う関数も定義できるが、モジュールの外で使えるのはエクスポートした関数のみである。
+-}
+
+--- ¶　幾何学モジュール
+{-
+    幾何学オブジェクトの体積と面積を計算する小さいモジュールを例に、モジュールの作り方を見ていこう。
+    まずは Geometry.hs という名前のファイルを作ることから始める。
+
+    モジュールの先頭でモジュールの名前を指定する。
+    Geometry.hs というファイル名なら、Geometry という名前にしなければならない。
+    そのモジュールがエクスポートする関数を指定して、それから関数を追加する。
+
+    したがって、モジュールは以下のようなコードから始まる。
+
+        module Geometry
+        ( sphereVolume
+        , spehereArea
+        , cubeVolume
+        , cubeArea
+        , cuboidVolume
+        , cuboidArea
+        ) where
+
+    見てのとおり、球（sphere）、立方体（cube）、直方体（cuboid）の体積、表面積を求める予定である。
+
+    では関数を定義しよう。
+
+        ```
+        module Geometry
+        ( ... 
+        )
+
+        sphereVolume :: Float -> Float
+        sphereVolume radius = (4.0/3.0) * pi * (radius ^ 3)
+
+        sphereArea :: Float -> Float
+        sphereArea radius = 4 * pi * (radius ^ 2)
+
+        cubeVolume :: Float -> Float
+        cubeVolume side = cuboidVolume side side side
+
+        cubeArea :: Float -> Float
+        cubeArea side = cuboidArea side side side
+        
+        cuboidVolume :: Float -> Float -> Float -> Float
+        cuboidVolume a b c = rectArea a b * c
+
+        cuboidArea :: Float -> Float -> Float -> Float
+        cuboidArea a b c = rectArea a b * 2 + rectArea a c * 2 + rectArea c b * 2
+
+        rectArea :: Float -> Float -> Float
+        rectArea a b = a * b
+        ```
+
+    立方体は直方体の特別なケースなので、その表面積と体積は、すべての辺が同じ長さの直方体として扱うことえ定義している。
+    また、辺の長さから長方形の面積を求めるのに、rectArea という補助関数を定義している。
+    この関数はモジュール内の cuboidArea と cuboidVolume で使っているが、エクスポートはしていないことに注意。
+    このモジュールの外からは rectArea 関数は使えない。
+
+    モジュールを作成したら、インターフェースとしての役割をする関数のみをエクスポートするようにする。
+    そうすれば実装は隠蔽される。
+    Geometry モジュールの利用者は、エクスポートされていない関数のことを気にする必要はない。
+
+    このモジュールを使うには次のようにするだけ。
+    
+        import Geometry
+
+    ただし、Geometry.hs がインポートするモジュールと同じフォルダになければいけない。
+-}
+
+--- ¶ 階層的モジュール
+{-
+モジュールには階層構造を与えることもできる。
+各モジュールは複数のサブモジュールを持つことができ、そのサブモジュールはまたサブモジュールを持つことができる。
+幾何学モジュール Geometry を分割して、立体の種類ごとの 3 つのサブモジュールを持つモジュールにしてみよう。
+
+最初に、Geometry という名前のフォルダを作る。
+その中に 3 つのファイル Sphere.hs、Cuboidhs、Cube.hs を作る。
+3 つのファイルの中身をそれぞれ見てみよう。
+
+Sphere.hs の内容は次のとおり。
+
+```
+module Geometry.Sphere
+( Volume
+, area
+) where
+
+volume :: Float -> Float
+volume radius = (4.0 / 3.0) * pi * (radius ^ 3)
+
+area :: Float -> Float
+area radius = 4 * pi * (radius ^ 2)
+```
+
+Cuboid.hs は次のようになっている。
+
+```
+module Geometry.Cuboid
+( volume
+, area
+) where
+
+volume :: Float -> Float -> Float -> Float
+volume a b c = rectArea a b * c
+
+area :: Float -> Float -> Float -> Float
+area a b c = rectArea a b * 2 + rectArea a c * 2 + rectArea c b * 2
+
+rectArea :: Float -> Float -> Float
+rectArea a b = a * b
+```
+
+最後は次のような Cube.hs。
+
+```
+module Geometry.Cube
+( volume
+, area
+) where
+
+import qualified Geometry.Cuboid as Cuboid
+
+volume :: Float -> Float
+volume side = Cuboid.volume side side side
+
+area :: Float -> Float
+area side = Cuboid.area side side side
+```
+
+Sphere.hs を Geometry フォルダの中に配置して、Geometry.Sphere という名前のモジュールを定義していることに注目。
+立方体と直方体でも同様にした。
+
+また、3 つのモジュールすべてで同じ名前の関数を定義していることにも注目。
+これが可能なのは別々のモジュールにあるからである。
+
+これで、以下のようにインポートできるようになった。
+
+    import Geometry.Sphere
+
+インポートしたら、球の表面積と体積を求める area と volume 関数を呼び出すことができる。
+2 つ、あるいはそれ以上のモジュールを走査したいなら、修飾付きインポートを使う必要がある（同じ名前の関数をエクスポートしているため）。
+
+    import qualified Geometry.Sphere as Sphere
+    import qualified Geometry.Cuboid as Cuboid
+    import qualified Geometry.Cube as Cube
+
+Sphere.area、Sphere.volume、Cuboid.area のようにすれば、対応する立体の表面積や体積を求めることができる。
+
+とても大きくて、とてつもない数の関数を含むファイルを書いていることに気づいたときは、共通して使える関数を見つけ出し、それをモジュールに切り出すことを検討しよう。
+
+-}
+
+--- ここから
+myCubeVolume :: Float
+myCubeVolume = cubeVolume 12
+
+mySphereVolume :: Float
+mySphereVolume = sphereVolume 4.2
+    --- ここまでは単一ファイル（Geometry.hs）からインポートした関数を利用したもの
+
+-- ↓ は階層モジュール Geometry/○○.hs を使ったもの。
+
+myCubeV :: Float
+myCubeV = Cube.volume 11.9
+
+mySphereV :: Float
+mySphereV = Sphere.volume 4.3
+
+myCuboidA :: Float
+myCuboidA = Cuboid.area 2.0 1.8 3.0
