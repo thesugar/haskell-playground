@@ -591,3 +591,218 @@ proded = Vector 4 9 5 `dotProd` Vector 9 2 4 -- 74
 
 calcedVec :: Num a => Vector a
 calcedVec = Vector 2 9 3 `vmult` (Vector 4 9 5 `dotProd` Vector 9 2 4) -- Vector 148 666 222
+
+-------------------------------
+-- インスタンスの自動導出
+-------------------------------
+
+{-
+    型クラスについて改めて復習：型クラスは、あるふるまいを定義するインターフェースであり、ある型がその振る舞いをサポートしていれば、
+    その型クラスのインスタンスにできるのだった。たとえば、Int 型は Eq 型クラスのインスタンスである。
+    これは、Eq 型クラスは「等値生テストができるもの」という振る舞いを定義しているからである。
+    整数には等値性が定義されているから、Int は Eq 型クラスに属することになる。
+    これが便利なのは、Eq のインターフェースになる、== と /= という関数があるからである。
+    ある型が Eq 型クラスのインスタンスであるなら、その型の値には == が使える。
+    これこそが、 4 == 4 と "foo" == "bar" が両方とも型検査を透仕組みである。
+
+    Haskell の型クラスは、Java、Python、C++ といった言語の「クラス」と紛らわしいので、引っかかりやすいところである。
+    そういったオブジェクト指向言語でクラスといえば、何らかの動作をするオブジェクトを作るための青写真のことである。
+    しかし、Haskell のクラスは、データを作る道具ではない。
+    そうではなく、まずデータ型を作り、それから「このデータには何ができるのだろう？」と考えるのである。
+    もしその型が、等値性をテストできるものであれば、Eq 型クラスのインスタンスにする。
+    その型が代償比較できるものであれば、Ord 型クラスのインスタンスにする。
+
+    Haskell は、特定の型クラスのインスタンス宣言を自動導出（derive）する能力を備えている。
+    自動導出できる型クラスは Eq、Ord、Enum、Bounded、Show、Read である。
+    自作のデータ型を作るとき、deriving キーワードを使えば、Haskell がこれらの型クラスの文脈での振る舞いを自動導出してくれる。
+-}
+
+--- ¶　人間の平等
+{- 以下のデータ型を見よ。-}
+
+{-
+data Person_ = Person_ { firstName_ :: String
+                       , lastName_ :: String
+                       , age_ :: Int
+                       }
+-}
+
+{-
+    これは人間を表している。いま、この世に同姓同名で年齢まで一致する人はいない、と仮定しよう。
+    では、二人の人の記録があるとき、その 2 つの記録が同一人物を表しているか判定することは妥当だろうか。
+    もちろん、判定できてしかるべきである。
+    だから、この型を Eq 型クラスに属させるのは妥当なことだろう。
+    インスタンス宣言は自動導出してもらおう。
+-}
+
+data Person_ = Person_ { firstName_ :: String
+                       , lastName_ :: String
+                       , age_ :: Int
+                       } deriving (Eq)
+
+{-
+    ある型に Eq を自動導出して == や /= で比較しようとすると、Haskell はまず値コンストラクタが一致しているかを調べる。
+    それから、値コンストラクタの中に入っている各フィールドがすべて一致しているか、それぞれの組みを == を使って比較する。
+    ただし落とし穴が 1 つある。
+    すべてのフィールドの型が、Eq 型クラスのインスタ成すでないと自動どうshつには使えない。
+    今回の場合は、String も Int もこの条件を満たすから OK である。
+
+    まずは人物を何人か作ってみよう。
+-}
+
+mikeD :: Person_
+mikeD = Person_ {firstName_ = "Michael", lastName_ = "Diamond", age_ = 43}
+
+adRock :: Person_
+adRock = Person_ {firstName_ = "Adam", lastName_ = "Horovitz", age_ = 41}
+
+mca :: Person_
+mca = Person_ {firstName_ = "Adam", lastName_ = "Yauch", age_ = 44}
+
+{-
+    Eq を自動導出したことにより、
+    mca == adRock や mikeD == adRock、mikeD == mikeD が意味を持つようになる。
+    （ターミナルに打ち込むとそれぞれ False, False, True と返ってくる）
+
+    もちろん、Eq a という型クラス制約のついた関数の a のところならどこにでも使える。たとえば elem など。
+    mikeD `elem` [mca, adRock, mikeD]
+    > True
+-}
+
+--- ¶　読み方を書いてみせてよ
+{-
+    Show と Read はそれぞれ文字列へ変換できるものの型クラス、および文字列から変換できるものの型クラスである。
+    Eq のときと同じく、ある型を Show や　Read のインスタンスにしたいなら、その型の値コンストラクタにフィールドがあれば、
+    それらの型も Show や Read に属している必要がある。
+
+    では、Person_ データ型を Show と Read にも属させてみよう。
+-}
+
+data Person__ = Person__ { firstName__ :: String
+                        ,  lastName__ :: String
+                        ,  age__ :: Int
+                        } deriving (Eq, Show, Read)
+
+{- これで人物の情報をターミナルに出力できる。 -}
+
+mikeD' :: Person__
+mikeD' = Person__ {firstName__ = "Michael", lastName__ = "Diamond", age__ = 43}
+
+adRock' :: Person__
+adRock' = Person__ {firstName__ = "Adam", lastName__ = "Horovitz", age__ = 41}
+
+mca' :: Person__
+mca' = Person__ {firstName__ = "Adam", lastName__ = "Yauch", age__ = 44}
+
+{-
+    deriving Read もしているので、ターミナルに以下のように乳右力すると、Person__ 型として出力を返してくれる。
+        > read "Person__ {firstName__ = \"Mike\", lastName__ = \"Diablo\", age__ = 23}" :: Person__
+        Person__ {firstName__ = "Mike", lastName__ = "Diablo", age__ = 23}
+
+    多相型も読み取ることができるが、どの型がほしいか Haskell が推論できるだけの情報を与える必要がある。例えば、以下のようなのを試すとエラーになる。
+        read "Just 3" :: Maybe a
+    正しくは、read "Just 3" :: Maybe Int などとする必要がある（Maybe Double とか Maybe Float でもよい）。
+-}
+
+--- ¶　順番を守ってください！
+{-
+    順序づけ可能な型のための型クラス、Ord のインスタンスも自動導出できる。同じ型の値を 2 つ比較したとき、もし 2 つが異なる値コンストラクタから作られた物なら、
+    先に定義されているほうが小さいとみなされる。
+    例えば、Bool は False と True の値を取る。Bool を比較すると何が起こるかは、Bool は以下のように定義されていると考えればわかる。
+        data Bool = False | True deriving (Ord)
+    False 値コンストラクタが先に定義されていて、その後で True が指定されているので、Ord を自動導出すると、True は False より大きいのだろうと考えられる。
+-}
+
+comp1 :: Ordering
+comp1 = True `compare` False -- GT
+
+comp2 :: Bool
+comp2 = True > False -- True
+
+{-
+    2 つの値が同じ値コンストラクタでできている場合、フィールドがなければ 2 つは等しいとされる。
+    フィールドがあれば、フィールドどうしが比較され、どちらが大きいか決まる（この場合、フィールドの型もまた Ord に属している必要がある）。
+
+    Maybe a データ型では、Nothing 値コンストラクタが Just 値コンストラクタの前に定義されているので、Nothing 値はつねに Just something より小さいとされる。
+    一方、2 つの Just 値を指定したときは、Haskell は中身を比較してくれる。
+
+    でも、Just (*3) > Just (*2) のようなことはできない。(*3) などは関数の型を持ち、関数は Ord のインスタンスではないから。
+-}
+
+comp3 :: Bool
+comp3 = Nothing < Just (100 :: Int) -- True
+
+comp4 :: Bool
+comp4 = Nothing > Just (-999999 :: Integer) -- False
+
+comp5 :: Ordering
+comp5 = Just (3 :: Int) `compare` Just (2 :: Int) -- GT
+
+comp6 :: Bool
+comp6 = Just (100 :: Int) > Just (50 :: Int) -- True
+
+--- ¶ 何曜日でもいいよ
+{-
+    代数データ型を使えば列挙型は簡単に作ることができる。
+    その際には Enum と Bounded 型クラスが便利。こんなデータ型を考えてみよ。
+
+        data Day = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday
+
+    すべての値コンストラクタがゼロ引数（フィールドがない）なので、これを Enum 型クラスに属させることができる。
+    Enum は、前者関数（pred）と後者関数（succ）を持つ型のための型クラスである。
+    Day は上限と下限を持つ型の型クラスである Bounded のインスタンスにもできる。
+    ついでに自動導出できるすべての型クラスのインスタンスにしてしまおう。
+-}
+
+data Day = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday
+        deriving (Eq, Ord, Show, Read, Bounded, Enum)
+
+--　Day 型で何ができるのか？
+{-
+    Day は Show と Read のインスタンスであるから、その値を文字列にしたり文字列から変換したりできる。
+    Wednesday
+    > Wednesday
+
+    show Wednesday
+    > "Wednesday"
+
+    read "Wednesday" :: Day
+    > Wednesday
+
+    Eq 型クラスと Ord 型クラスのインスタンスでもあるので、等号や不等号で比較できる。
+    Saturday == Sunday
+    > False
+
+    Saturday == Saturday
+    > True
+
+    Saturday > Friday
+    > True
+
+    Monday `compare` Wednesday
+    > LT
+
+    さらに、Bounded のインスタンスでもあるから、上限と下限を取ることもできる。
+-}
+
+minBoundOfDay :: Day
+minBoundOfDay = minBound :: Day -- Monday
+
+maxBoundOfDay :: Day
+maxBoundOfDay = maxBound :: Day -- Sunday
+
+{-
+    Enum のインスタンスでもあるので、昨日の曜日や明日の曜日を知ることができるし、範囲を指定してリストを作ることもできる。
+-}
+
+afterMon :: Day
+afterMon = succ Monday -- Tuesday
+
+beforeSat :: Day
+beforeSat = pred Saturday -- Tuesday
+
+daysList :: [Day]
+daysList = [Thursday .. Sunday] -- [Thursday,Friday,Saturday,Sunday]
+
+week :: [Day]
+week = [minBound .. maxBound] -- [Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday]
