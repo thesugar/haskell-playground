@@ -321,3 +321,304 @@
     I/O アクションの結果として返したくない場合があったりするから。
     違う結果を I/O アクションの返り値にしたいときは、return を使って望みの結果を生成する I/O アクションを作り、それを do ブロックの最後に配置する。
 -}
+
+-------------------------------
+--　いくつかの便利な I/O 関数
+-------------------------------
+
+import Control.Monad
+import Data.Char
+
+--- 🌸 putStr
+{-
+    putStr は putStrLn とよく似ている。文字列を引数としてうけとり、その文字列を端末に表示する I/O アクションを返す。
+    しかし putStrLn とは異なり、putSTr は文字列を表示したあとに改行を出力しない。
+
+        main = do
+            putStr "Hey, "
+            putStr "I'm "
+            putStrLn "Andy!"
+
+    これをコンパイルして実行すると以下のような結果になる。
+        Hey, I'm Andy!
+-}
+
+--- 🌸 putChar
+{-
+    putChar は文字を受け取り、その文字を端末に表示する I/O アクションを返す関数。
+
+        main = do
+            putChar 't'
+            putChar 'e'
+            putChar 'h'
+
+    putStr は putChar を使って再帰的に定義できる。
+    putStr の基底部は空の文字列で、この場合は空の文字列を出力する。
+    要するに、return () を使って何もしない I/O を返す。
+    空でなければ、先頭の文字を putChar で表示して、それから残りを再帰的に表示する。
+-}
+
+myPutStr :: String -> IO ()
+myPutStr [] = return ()
+myPutStr (x:xs) = do
+    putChar x
+    myPutStr xs
+
+{-
+    I/O の中で、純粋なコードと同じように再帰が使えることがわかるだろうか。
+    まずは再帰の基底部を定義して、それから残りのケースを考える。
+    この場合だと、最初に先頭の文字を出力して、それから残りの文字列を出力する。
+-}
+
+--- ¶　print
+{-
+    print は Show のインスタンスの型（文字列としてどう表現すればよいか知っている型）の値を受け取り、それに show を適用して
+    「文字列化」して、それからその文字列を端末に出力する。
+    基本的にこれは putStrLn . show と同じものである。
+    はじめに引数に対して show を呼び出し、その結果を putStrLn に与える。
+    これは値を表示する I/O アクションを返す。
+-}
+
+--- GHCi で実行するために printTry とか変な名前にしてるけど、単独のファイルで書いてコンパイルして実行する場合は main = とすること。
+printTry :: IO ()
+printTry = do
+    print True
+    print (2 :: Int)
+    print "haha"
+    print (3.2 :: Double)
+    print [3 :: Int, 4 ::Int, 3 :: Int] -- Werror オプション使ってると、こうやって型注釈いちいち書かないとエラーになる
+
+{-
+    見てのとおり、print はとても便利な関数。
+    I/O アクションが実行されるのは main の中に入っているか GHCi のプロンプトで評価しようとしたときだけ、という話を思い出してほしい。
+    我々が GHCi で値をタイプして Enter を押したとき、その値を端末に表示するのに GHCi が実際に使っているのは print なのである。
+
+    文字列を表示したいとき、普通は putStrLn を使う。
+    ダブルクオートで囲まれてほしくないからである。
+    でも、他の型の値を端末に表示するときには print が一番よく使われる。
+
+        〜参考〜
+        *Main> print "haha"
+        "haha"
+        *Main> putStrLn "haha"
+        haha
+        *Main> print 2
+        2
+        *Main> 2
+        2
+-}
+
+--- 🌸when
+{-
+    when 関数は Control.Monad モジュールにある関数（import Control.Monad するとアクセスできる）。
+    この関数の面白いところは、do ブロックでは制御構文のように見えるのに実際には普通の関数だというところである。
+
+    when は Bool と I/O アクションを受け取り、Bool の値が True の場合には渡された I/O と同じものを返す。
+    False だった場合は何もしない return () を返す。
+    次のコードは、入力を受け取り、それが SWORDFISH だったときに限ってそのままターミナルに出力するプログラムである。
+
+    見てのとおり、when は条件が満たされたときだけなんらかの I/O アクションを行いたい場合に便利な関数である。
+-}
+
+sword :: IO ()
+sword = do
+    input <- getLine
+    when (input == "SWORDFISH") $ do
+        putStrLn input
+
+{- when を使わなければ以下のように書くことになる。-}
+
+sword' :: IO ()
+sword' = do
+    input <- getLine
+    if (input == "SWORDFISH")
+        then putStrLn input
+        else return ()
+
+--- 🌸sequence
+{-
+    sequence 関数は、I/O アクションのリストを受け取り、それらを順に実行する I/O アクション（シーケンス）を返す。
+    この I/O アクションが生成する結果は、実行したすべての I/O アクションの結果からなるリストである。
+    例えば、以下のようなコードがあったとする。
+-}
+
+seqTry :: IO ()
+seqTry = do
+    a <- getLine
+    b <- getLine
+    c <- getLine
+    print [a, b, c]
+
+{-　これを次のように書くことができる。-}
+
+seqTry' :: IO ()
+seqTry' = do
+    rs <- sequence [getLine, getLine, getLine]
+    print rs
+
+{-
+    これら 2 つの結果はまったく同じになる。sequence [getLine, getLine, getLine] は getLine を 3 回行う I/O アクションを作る。
+    このアクションを名前に束縛したら、結果はすべての（getLine の）結果のリストになる。
+    であるから、この場合の結果はユーザーがプロンプトから入力した 3 つのものからなるリストになる。
+        *Main> seqTry'
+        hai
+        2
+        9.8
+        ["hai","2","9.8"]
+
+    sequence を使ったよくあるパターンは、リストに対して print や putStrLn のような関数を map するときである。
+    map print [1,2,3,4] は I/O アクションを作らない。
+    代わりに I/O アクションのリストを作る。意味的には、これは次のように書いたのと同じ。
+        [print 1, print 2, print 3, print 4]
+
+    I/O のリストを I/O アクションに変換したいなら、それをシーケンスにしないといけない。
+        *Main> sequence $ map print [1,2,3,4]
+        1
+        2
+        3
+        4
+        [(),(),(),()]
+
+    出力の最後にある [(), (), (), ()] はなんだろうか？
+    GHCi で I/O アクションを評価すると、端末にはその結果が表示される。
+    ただし結果が () のときだけは例外である。
+    この例外があるので、putStrLn "hehe" を評価すると GHCi は hehe とだけ表示する。
+    putStrLn "hehe" は () を生成するからである。
+    しかし GHCi に getLine を入力した場合には I/O アクションの結果が表示される。
+    getLine の型は IO String だからである。
+
+    🤔❓
+
+    （ん…？　だから、seqTry' のところの例では、sequence [getLine, getLine, getLine] は rs に束縛された。
+    　一方、sequence $ map print [1,2,3,4] つまり sequence [print 1, print 2, print 3, print 4] では、
+    　print 1 とか print 2 とかの型が print 1 :: IO () のように、() を結果として返す I/O アクションだから、
+    　それをリストにしたときに返されるものとしては [(), (), (), ()] のようになるよねということ（？　いまいちよくわからないが）
+    というか、結局、型が () だったら GHCi のターミナルには表示されないけど、() 以外だったら表示されるよってことで、
+    今回は [(), (), (), ()] で () とは違うから表示されるんだよってことだろうね。
+    return () すると端末には何も出てこないけど return "hoge" とやったり return [()] とするとそれぞれ "hoge"、[()] を結果が表示されるのでわかる）
+
+    さらにもっというと、Jupyter Notebook みたいなもんってことでは？
+    途中の 1 2 3 4 は副作用が表示されてて、最後の [(), (), (), ()] は関数の出力が出てるってことよね。
+    んで、関数の出力が () の場合は () は表示されない仕様だよってことだよね。
+    ちなみに、 sequence $ map print [1,2,3,4] の型を調べると IO [()] だよ。
+    （なお、putStrLn "hehe" :: IO () である）
+-}
+
+--- 🌸 mapM
+{-
+    「リストに対して I/O アクションを返す関数をマップし、それからシーケンスにする」という操作は頻出するので、
+    ユーティリティ関数 mapM と mapM_ が用意されている。
+    mapM は関数とリストを受け取り、リストに対して関数をマップして、それからそれをシーケンスにする。
+    mapM_ も同じことをするが、そのあとで結果を捨ててしまう。
+    I/O アクションの結果が必要ないときは mapM_ を使う。
+    mapM の使用例を次に示す。
+-}
+
+mapm :: IO [()]
+mapm = mapM print [1 :: Int, 2 :: Int, 3 :: Int]
+{-
+# 結果
+1
+2
+3
+[(),(),()]
+-}
+
+-- 3 つのユニットからなるリストは不要なので、以下のようにしたほうがいいだろう。
+
+mapm' :: IO ()
+mapm' = mapM_ print [1 :: Int, 2 :: Int, 3 :: Int]
+{-
+# 結果
+1
+2
+3
+-}
+
+--- 🌸forever
+{-
+    forever 関数は I/O アクションを受け取り、その I/O アクションを永遠に繰り返す I/O アクションを返す。
+    Control.Monad で定義されている。
+    次の小さなプログラムは、無限にユーザーからの入力を受け取り、それを大文字化して出力し続ける。
+    Ctrl + C（Ctrl + D）で強制終了しないと終わらない。
+-}
+
+foreverTry :: IO ()
+foreverTry = forever $ do -- forever がなければ、一回だけ入力を受け付けてそれを大文字にして返したらおわり。
+    putStr "Give me some input: "
+    l <- getLine
+    putStrLn $ map toUpper l
+
+--- 🌸 forM
+{-
+    forM（Control.Monad にある）は、mapM に似ているが引数の順序が逆になっている。
+    最初の引数がリストで、2 番目がそのリストにマップする関数である。
+    何の役に立つのだろうか？
+    ラムダ式と do 記法をうまく組み合わせて以下のような書き方ができるのである。
+-}
+
+forMtry :: IO [()]
+forMtry = do
+    colors <- forM [1::Int, 2::Int, 3::Int, 4::Int] $ \a -> do
+        putStrLn $ "Which color do you associate with the number "
+                    ++ show a  ++ "?"
+        color <- getLine
+        return color
+    putStrLn "The colors that you associate with 1, 2, 3, and 4 are: "
+    mapM putStrLn colors
+
+{-
+*Main> forMtry 
+Which color do you associate with the number 1?
+black
+Which color do you associate with the number 2?
+red
+Which color do you associate with the number 3?
+blue
+Which color do you associate with the number 4?
+orange
+The colors that you associate with 1, 2, 3, and 4 are: 
+black
+red
+blue
+orange
+[(),(),(),()]
+-}
+
+{-
+    \a -> do ... というラムダ式は、数を受け取り I/O アクションを返す関数である。
+    do の最後で return color を呼んでいることに注目。
+    この do ブロックはユーザーの選択した色を表す文字列を返すと定義しているのでこうしている。
+    ただ、実際にこう書く必要はない。
+    getLine はすでに選択した色を返していて、それが　do ブロックの最後に位置しているからである。
+    color <- getLine を実行したあとで return color を行うのは、getLine の結果をほどいてから再度梱包しているだけなので、
+    単に getLine を呼び出すのと同じである。
+
+    forM 関数を 2 つの引数で呼び出すと、I/O アクションが生成され、その結果は colors に束縛される。
+    colors は文字列を含む普通のリストである。
+    最後にすべての色を mapM putStrLn colors を呼んで表示している。
+
+    forM はこんなふうに考えればいいだろう。
+    「このリストの各要素に対応する I/O アクションを作る。それぞれの I/O アクションの動作は、アクションを作るのに使った要素に応じたものにできる。
+    最終的には、これらのアクションが実行された結果が何かに束縛される（結果が必要なければ丸ごと捨ててしまうこともできる）」
+
+    forM を使わなくても同じことはできる。
+    しかし forM を使うとコードが読みやすくなる。do 記法を使った何らかのアクションをマップしてシーケンスにしたい場合、普通は forM を使う。
+    （💡mapM と forM はリストと関数、どちらの引数を長く書きたいかによって使い分けるのがよいだろう。
+    　　関数を長く書きたい場合は今見たように forM がよいだろうし、関数が短い（print だけとか）なら mapM がよいだろう）
+-}
+
+
+-------------------------------
+--　I/O アクションおさらい
+-------------------------------
+
+{-
+    I/O の基本をざっとおさらいしておこう。
+    I/O アクションというのは値であり、Haskell の他の値とよく似ている。
+    関数の引数として渡すことができて、関数の結果として I/O アクションを返すことができる。
+
+    I/O アクションが特別なのは、main 関数の中に入っていると（あるいは GHCi のターミナルで評価されると）、それが実行されるところである。
+    画面に何かを表示したり、音楽をスピーカーから再生したりするのである。
+    またどの I/O アクションも、実世界から取得してきたものを伝える結果を生成できる。
+-}
