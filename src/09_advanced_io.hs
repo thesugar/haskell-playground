@@ -366,4 +366,351 @@ withFile' name mode f = bracket (openFile name mode)
     appendFile はすでにファイルが存在していた場合に上書きをするのではなくファイルの末尾に追記するという点が異なる。
 -}
 
+-------------------------------
+--　ToDo リスト
+-------------------------------
+{-
+    ToDo リストをテキストファイルに追加するプログラムを作るのに appendFile 関数を使ってみよう。
+    todo.txt という名前のファイルにタスクが 1 行ごとに書かれているものとする。
+    プログラムは、標準入力から 1 行ずつ読み込んで、それを ToDo リストに追加する。
 
+        ```
+        import System.IO
+
+        main = do
+            todoItem <- getLine
+            appendFile "todo.txt" (todoItem ++ "\n")
+        ```
+
+    各行の最後に "\n" を追加していることに注意。getLine は改行文字を除いた文字列を返してくるからである。
+    これを appendtodo.hs に保存して、コンパイルして、実行する。
+
+        $ ./src/todo/appendtodo
+        Iron the dishes
+        $ ./src/todo/appendtodo
+        Dust the dog
+        $ ./src/todo/appendtodo
+        Take salad out of the oven
+-}
+
+--- ¶　アイテムの削除
+{-
+    todo.txt の ToDo リストに新しいアイテムを追加するプログラムを作った。
+    次はアイテムを削除するプログラムを作ろう。
+    System.DIrectory の新しい関数をいくつかと、System.IO の新しい関数を 1 つ使う。
+
+        ```
+        import System.IO
+        import System.Directory
+        import Data.List
+
+        main = do
+            contents <- readFile "todo.txt"
+            let todoTasks = lines contents
+                numberedTasks = zipWith (\n line -> show n ++ " - " ++ line) [0..] todoTasks
+            putStrLn "These are your TO-DO items:"
+            mapM_ putStrLn numberedTasks
+            putSTrLn "Which one do you want to delete?"
+            numberString <- getLine
+            let number = read numberString
+                newTodoItems = unlines $ delete (todoTasks !! number) todoTasks
+            (tempName, tempHandle) <- openTempFile "." "temp"
+            hPutStr tempHandle newTodoItems
+            hClose tempHandle
+            removeFile "todo.txt"
+            renameFile tempName "todo.txt"
+        ```
+
+    最初に todo.txt を読み込み、その内容を contents に束縛する。それから、その文字列を行ごとに分割し、文字列のリスト todoTasks にする。
+    ここで todoTasks は次のようになっているはずである。
+        ["Iron the dishes", "Dust the dog", "Take salad out of the oven"]
+    このリストと、0 から始まるリストを、数（例えば 3）と文字列（例えば "hey"）を受け取り、新しい文字列（"3 - hey"）を返す関数で zip する。
+    さて、numberedTasks は次のようになっているはずである。
+        ["0 - Iron the dishes"
+        ,"1 - Dust the dog"
+        ,"2 - Take salad out of the oven"
+        ]
+    それから mapM_ putStrLn numberedTasks で行ごとに表示して、どれを削除したいのかをユーザに問い合わせる。
+    いま、1 (Dust the dog) を削除したいとしよう。ターミナルに 1 を打ち込む。そうすると、numberString は "1" になる。
+    文字列ではなく数が欲しいので、この文字列に対して read を適用する。すると 1 が得られ、これが let で number に束縛される。
+
+    `Data.List の delete` と !! 関数 は覚えているだろうか？（delete は初出じゃないかな〜）
+    !! は、添字に対応するリストの要素を返す（インデックスアクセス的な）。
+    delete は、リストから指定した要素のうち最初に出てくるものを削除した新しいリストを返す。
+        > delete "hoge" ["hoge", "fuga", "moge", "hoge"]
+        ["fuga","moge","hoge"]
+    (todoTasks !! number) は "Dust the dog" になる。そして todoTasks の中から "Dust the dog" の最初の出現を削除し、
+    unlines を使って改行文字で区切られた 1 つの文字列に連結する。
+    それが newTodoItems になる。
+
+    それから、System.IO にある初登場の関数 openTempFile を使う。
+        openTempFile :: FilePath -> String -> IO (FilePath, Handle)
+    この関数は一時ディレクトリ（temp directory）のパスとファイル名のテンプレートを受け取り、一時ファイルを開く。
+    ここでは一時ディレクトリとして "." を使っている。"."　はカレントディレクトリを顕wす。
+    一時ファイル名のテンプレートとしては "temp" を使っている。
+    一時ファイルの名前は、"temp" の後ろにランダムな文字をいくつか付けたものになる。
+    openTempFile が返す IO アクションは、一時ファイルを開き、そのファイル名とハンドルのペアを返す。
+    todo2.txt のような名前の普通のファイルを開いても同じことはできるが、openTempFile を使うようにせよ。
+    openTempFile を使えば、何かが入っているファイルにうっかり上書きしないことが保証されるからである。
+
+    一時ファイルを開いたので、それに newTodoItems を書き込む。
+    古いファイルは変更されず、削除すべきものを削除した新しいリストが一時ファイルに格納される。
+
+    そのあとで、一時ファイルのハンドルを閉じ、removeFile で元のファイルを削除する。
+    （なお、removeFile :: FilePath -> IO () である）
+    古い todo.txt を削除したら、renameFile を使って一時ファイルの名前を todo.txt に変更する。
+    removeFile と renameFile（どちらも System.Directory の関数）は、引数としてハンドルではなくファイルのパスを受け取る。
+    このプログラムを deletetodo.hs に保存し、コンパイルして実行してみよう。
+
+    $ src/todo/deletetodo                                                                                                                                              +[master]
+    These are your TO-DO items:
+    1 - Iron the dishes
+    2 - Dust the dog
+    3 - Take salad out of the oven
+    Which one do you want to delete?
+    1
+
+    どのアイテムが残っているかを見てみると、
+        Iron the dishes
+        Take salad out of the oven
+    という結果になる。
+
+    いい感じ！　だが、一点気になるポイントがある。
+    一時ファイルを開いた後でプログラムが異常終了したら、一時ファイルが残ってしまうということである。
+    これを修正しよう。
+-}
+
+---　¶　クリーンアップ
+{-
+    問題が起こった場合でも一時ファイルが確実に削除されるようにするために、Control.Exception にある bracketOnError 関数を使うことにすsる。
+    この関数は bracket によく似ているが、bracket では処理が終わると常に獲得したリソースを開放するのに対し、
+    bracketOnError は何らかの例外が発生したときのみリソースを開放する。
+
+        ```
+        import System.IO
+        import System.Directory
+        import Data.List
+
+        main = do
+            contents <- readFile "todo.txt"
+            let todoTasks = lines contents
+                numberedTasks = zipWith (\n line -> show n ++ " - " ++ line) [0..] todoTasks
+            putStrLn "These are your TO-DO items:"
+            mapM_ putStrLn numberedTasks
+            putSTrLn "Which one do you want to delete?"
+            numberString <- getLine
+            let number = read numberString
+                newTodoItems = unlines $ delete (todoTasks !! number) todoTasks
+            
+            bracketOnError (openTempFile "." "temp")
+                (\(tempName, tempHandle) -> do -- 例外が発生したときの処理
+                    hClose tempHandle
+                    removeFile tempName)
+
+                (\(tempName, tempHandle) -> do
+                    hPutStr tempHandle newTodoItems -- 正常系
+                    hClose tempHandle
+                    removeFile "todo.txt"
+                    renameFile tempName "todo.txt")
+        ```
+
+    普通に openTempFile を使うのではなく、bracketOnError と一緒に使った。
+    引数として、エラーが発生したときにすべきこと、つまり、一時ハンドルを閉じてから一時ファイルを削除するというラムダ式を渡している。
+    最後に、一時ファイルを使って何をしたいか（正常系）を記述している。この部分は前と同じ。
+    新しいアイテムリストを書き出し、一時ファイルのハンドルを閉じて、今のファイルを削除し、一時ファイルの名前を変更している。
+-}
+
+-------------------------------
+--　コマンドライン引数
+-------------------------------
+
+{-
+    ターミナルで動作するスクリプトやアプリケーションを作りたいなら、コマンドライン引数を扱うことは不可欠だ。
+    ここまで作った ToDo アプリの問題は、ToDo ファイル（todo.txt）の名前がハードコードされていることである。
+
+    1 つの解決方法は、ToDo リストのファイル名を毎回ユーザーに尋ねるというものである。
+    このアプローチは、どのアイテムを削除するか決めるときに使った。
+    それでも動作するが、これはユーザに「プログラムを実行してから、プログラムが何か聞いてくるのを待って、プログラムに何か入力する」という要求をするわけで、
+    あまり理想的な解決策ではない。ちなみに、これは対話的（interactive）プログラムと呼ばれている。
+
+    対話的なコマンドラインプログラムには難点がある。スクリプトから呼び出してプログラムの実行を自動化したいとき、どうすればいいだろう？
+    プログラムと対話するスクリプトを書くのは、単純にプログラムを呼び出すスクリプトを書くより難しいものである。
+    そのため、プログラム実行に必要な情報は、プログラムを実行している間ではなく、プログラムを起動するときにユーザーに問い合わせるようにしたい。
+    プログラムに何をさせたいかをユーザからプログラムに伝える方法として、コマンドライン引数よりマシな方法はない。
+
+    System.Environment モジュールは、コマンドライン引数を取得するのに便利な 2 つの I/O アクション、getArgs と getProgName を提供している。
+    getArgs は getArgs :: IO [String] という型を持つ。これは、プログラムに与えられた引数を取得して、それを文字列のリストとして返す I/O アクションである。
+    getProgName は getProgName :: IO String という型を持つ。
+    これはプログラム名を返す I/O アクションである。これらがどのように動作するか、次の小さなプログラムで見てみよう。
+
+        import System.Environment
+        import Data.List
+
+        main :: IO ()
+        main = do
+            args <- getArgs
+            progName <- getProgName
+            putStrLn "The arguments are:"
+            mapM_ putStrLn args
+            putStrLn "The program name is:"
+            putStrLn progName
+
+    最初にコマンドライン引数を args に束縛して、それからプログラム名を progName に束縛する。
+    次に、putStrLn を使ってプログラムの引数をすべて表示し、それからプログラム地震の名前を法事する。
+    このコードを arg-test としてコンパイルし、実行してみよう。
+
+    $ ./src/io/arg-test first second w00t "multi word arg"
+    The arguments are:
+    first
+    second
+    w00t
+    multi word arg
+    The program name is:
+    arg-test
+-}
+
+-------------------------------
+--　ToDo リストをもっと楽しむ
+-------------------------------
+
+{-
+    前の例では、タスクを追加するプログラムと削除するプログラムを完全に別々のプログラムとして作成した。
+    ここでは、両方のプログラムを 1 つにまとめて、追加するか削除するかをプログラムに渡すコマンドライン引数で選択できるようにしよう。
+    さらに、todo.txt ではなく別のファイルも操作できるようにしよう。
+    このプログラムを todo という名前にすることにして、次の 3 つの異なる操作を行えるようにする。
+        - タスクの閲覧
+        - タスクの追加
+        - タスクの削除
+    タスクを todo.txt に追加するには、端末に次のように入力することにする。
+        $ ./todo add todo.txt "Find the magic sword of power"
+    タスクを閲覧するには view コマンドを入力する。
+        $ ./todo view todo.txt
+    タスクの削除には番号を使う
+        $ ./todo remove todo.txt 2
+-}
+
+--- ¶　マルチタスクタスクリスト
+{- 
+    まず、コマンドを "add" や "view" のような文字列として受け取り、引数のリストを受け取って望みの動作を行う I/O アクションを返す関数を作る。
+
+    ```
+    import System.Environment
+    import System.Directory
+    import System.IO
+    import Data.List
+    import Control.Exception
+
+    dispatch :: String -> [String] -> IO ()
+    dispatch "add" = add
+    dispatch "view" = view
+    dispatch "remove" = remove
+
+    main = do
+        (command:argList) <- getArgs
+        dispatch command argList
+    ```
+
+    最初に、コマンドライン引数を取得してそれらを (command:argList) に束縛する。
+    これは、最初の引数を command に束縛して、残りの引数を argList に束縛するという意味のパターンマッチである。
+    main ブロックの次の行で dispatch 関数にコマンド（command）を渡し、これは add、view、remove のいずれかを返す。
+    それから、その関数に argList を渡す。
+
+    次に、add 関数を実装しよう。
+
+    ```
+    add :: [String] -> IO ()
+    add [fileName, todoItem] = appendFile fileName (todoItem ++ "\n")
+    ```
+
+    今度は view 関数を実装する。
+    
+    ```
+    view :: [String] -> IO ()
+    view [fileName] = do
+        contents <- readFile fileName
+        let todoTasks = lines contents
+            numberedTasks = zipWith (\n line -> show n ++ " - " ++ line) [0..] todoTasks
+        putStr $ unlines numberedTasks
+    ```
+
+    最後に remove 関数を実装する（上記の「¶　アイテムの削除」でやったことと同じ）。
+
+    ```
+    remove :: [String] -> IO ()
+    remove [fileName, numberString] = do
+        contents <- readFile fileName
+        let todoTasks = lines contents
+            numberedTasks = zipWith (\n line -> show n ++ " - " ++ line) [0..] todoTasks
+        putStrLn "These are your TO-DO items:"
+        mapM_ putStrLn numberedTasks
+        let number = read numberString
+            newTodoItems = unlines $ delete (todoTasks !! number) todoTasks
+        bracketOnError (openTempFile "." "temp")
+            (\(tempName, tempHandle) -> do
+                hClose tempHandle
+                removeFile templFile)
+
+            (\(tempName, tempHandle) -> do
+                hPutStrLn tempHandle newTodoItems
+                hClose tempHandle
+                removeFile fileName
+                renameFile tempName fileName)
+    ```
+
+    改めてここでの解法をまとめると、コマンドから「リストの形でコマンドライン引数を受け取って I/O アクションを返す関数」への橋渡しをする dispatch を作った。
+    関数 dispatch は、”command が何か” に基づいて適切な関数を返す。
+    その関数をコマンドライン引数の残りと一緒に呼び出し、適切な操作を行う I/O アクションを取得して、それを実行する。
+    このように、高階関数を使うことで、まず distpatch 関数から適切な関数を受け取り、次にその関数にコマンドライン引数を渡して I/O アクションを得る、という設計が可能になったのである。
+
+    dispatch 関数を使っていることで、簡単に機能を追加できるという利点もある。
+    dispatch にパターンを追加して対応する関数を実装するだけで万事 OK！
+
+    ※　以下、使用例。パス（path）に注意。親ディレクトリから子（/src/todo）ディレクトリ内のファイルを実行するときは、その親ディレクトリから見た相対パスでファイルを指定する必要がある
+    　（そのときに単に「todo.txt」と指定すると、その子ディレクトリの中ではなく、親ディレクトリと同じディレクトリに todo.txt が作成されたりする）が、/src/todo ディレクトリに移動して
+    　　実行すると、単に「todo.txt」と指定しても、その子ディレクトリの中に todo.txt が作成されるなどといった動きになる）
+    ~/haskell-playground/src/todo thesugar $ ./todo view todo.txt
+    0 - Iron the dishes
+    1 - Take salad out of the oven
+    ~/haskell-playground/src/todo thesugar $ ./todo add todo.txt "Pick up children from dry cleaners"
+    ~/haskell-playground/src/todo thesugar $ ./todo view todo.txt
+    0 - Iron the dishes
+    1 - Take salad out of the oven
+    2 - Pick up children from dry cleaners
+    ~/haskell-playground/src/todo thesugar $ ./todo remove todo.txt 2
+    These are your TO-DO items:
+    0 - Iron the dishes
+    1 - Take salad out of the oven
+    2 - Pick up children from dry cleaners
+    ~/haskell-playground/src/todo thesugar $ ./todo view todo.txt
+    0 - Iron the dishes
+    1 - Take salad out of the oven
+-}
+
+--- ¶　不正な入力に対応する
+{- 
+    まずは、すべてを拾うパターンを dispatch 関数の最後に追加して、コマンドが存在しなかった旨を表示する関数を返すようにする。
+
+        ```
+        dispatch :: String -> [String] -> IO ()
+        dispatch "add" = add
+        ...
+        dispatch command = doesntExist command
+
+        doesntExist :: String -> [String] -> IO ()
+        doesntExist command _ =
+            putStrLn $ "The " ++ command ++ " command doesn't exist" 
+        ```
+
+    add, view、remove のそれぞれの関数に対してもすべて拾うパターンを追加して、与えられたコマンドに対して
+    引数の数が違うということをユーザーに伝えることができる。
+        
+        ```
+        add :: [String] -> IO ()
+        add [fileName, todoItems] = appendFile fileName (todoItem ++ "\n")
+        add _ = putStrLn "The add command takes exactly two arguments"
+        ```
+
+    まだすべての不正な入力をカバーしきれていないことに注意。
+    たとえば、プログラムを `./todo` のように（引数なしで）実行すると、プログラムはクラッシュする。
+    他にも、ファイルを開く前に存在チェックをするといったことも実際には必要だろう。
+-}
