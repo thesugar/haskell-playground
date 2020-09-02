@@ -714,3 +714,250 @@ withFile' name mode f = bracket (openFile name mode)
     たとえば、プログラムを `./todo` のように（引数なしで）実行すると、プログラムはクラッシュする。
     他にも、ファイルを開く前に存在チェックをするといったことも実際には必要だろう。
 -}
+
+-------------------------------
+--　ランダム性
+-------------------------------
+
+{-
+    たいていのプログラミング言語は乱数を返す関数を持っている。
+    関数を呼び出すたびに違う乱数が返る。さて、Haskell ではどうだろう？
+    Haskell が純粋関数型言語だということを思い出そう。
+    これはすなわち参照透過性を持つということだった。
+    そして参照透過性は、関数が同じ引数で 2 回呼ばれたなら必ず同じ結果を生成しなければならないことを意味する。
+
+    これは本当に素晴らしい性質である。
+    なぜなら、そのおかげでプログラムが本当に必要になるまで値の評価を遅らせることができるようになるからである。
+    ところが、これが乱数を得るのを少々厄介にしている原因でもある。
+
+    他の言語では、ランダムに見える数を生成するとき、まずは初期データ（例えば現在時刻のようなもの）を受け取り、
+    それに基づいてランダムに見える数を生成する。Haskell でも、何か初期データ、あるいはランダム性を受け取り、それから乱数を生成する関数を作れる。
+    ランダム性は I/O を使って外から持ってくる。
+
+    System.Random モジュールを見てみよう。このモジュールは乱数生成に必要なすべての関数を持っている。
+    それでは、ここからエクスポートされている関数 random を見ていこう。
+    型シグネチャは次のようになっている。
+        random :: (RandomGen g, Random a) => g -> (a, g)
+
+    RandomGen 型クラスはランダム性の源として扱える型を表し、Random 型クラスはランダムな値になることのできる型を表す。
+    例えば、真理値は True か False からランダムに選ぶことにより生成できる。同様に数も生成できる。
+    random の型宣言を翻訳してみると、次のような感じになる。「乱数ジェネレータ（ランダム性の源）を受け取り、ランダムな値と新しい乱数ジェネレータを返す」。
+    なぜランダムな値と一緒に新しいジェネレータも返す必要があるのかはすぐにわかる。
+
+    random 関数を使うためには、何らかの乱数ジェネレータを手に入れる必要がある。System.Random モジュールには StdGen といういい感じの型がある。
+    これは型クラス RandomGen のインスタンスになっている。
+    StdGen を手動で作ったり、ある種の乱数値をもとにシステムに生成してもらったりできる。
+
+    手動で乱数ジェネレータを作るには mkStdGen を使う。これは
+        mkStdGen :: Int -> StdGen
+    という型を持つ。整数を引数に取り、その値をもとに乱数ジェネレータを返す。
+    それでは random と mkStdGen を連携させて、（ほぼ）ランダムな数を作ってみよう。
+
+        💡まず `stack install random` として Random パッケージをインストールする必要あり。
+-}
+
+rand :: (Int, StdGen)
+rand = random (mkStdGen 100)
+    -- (-3633736515773289454,693699796 2103410263)
+
+randBool :: (Bool, StdGen)
+randBool = random (mkStdGen 100)
+    -- (True,4041414 40692)
+
+    -- 同じ乱数ジェネレータ（`mkStdGen 100` など）で random を再度呼び出しても結果は同じ。
+    -- 異なる乱数ジェネレータを引数として random 関数に渡すと異なるランダム値が得られる。
+
+{-
+    👉　テキストだと、GHC のターミナルに打ち込むときであっても、random (mkStdGen 100) :: (Int, StdGen) というふうに
+        型指定しないとエラーが出る、と記述されている（random 関数は Random 型クラスの任意の型を返す可能性があるため）が、
+        （仕様が変わったのか、）実際には GHC のターミナルに打ち込むときは random (mkStdGen 100) とするだけで (Int, StdGen) 型の結果が出る。
+        （なお、↑ のようにモジュール内に記載するときはどのみち型指定するけど）
+-}
+
+--- ¶　コイントス
+{-
+    3 回のコイントスをシミュレートする関数を書こう。もし random がランダムな値と一緒に新しい乱数ジェネレータを返さなければ、それぞれのコイントスの結果を生成するために、
+    この関数に 3 つの乱数ジェネレータを渡す必要がある。
+    しかし、1 つのジェネレータで Int 型（たくさんの異なる値を取りうる）のランダムな値を生成できるのだから、3 回のコイントスの結果（8 通りしかない）だって生成できてしかるべきである。
+    ランダムな値と一緒に新しいジェネレータをあけす random 関数がここで役に立つ。
+    コインを単純に Bool として表すことにしよう。True が裏で、False が表である。
+-}
+
+threeCoins :: StdGen -> (Bool, Bool, Bool)
+threeCoins gen =
+    let (firstCoin, newGen) = random gen
+        (secondCoin, newGen') = random newGen
+        (thirdCoin, _) = random newGen'
+    in (firstCoin, secondCoin, thirdCoin)
+
+{-
+    random にジェネレータを渡して、コイントスの結果と新しいジェネレータを生成する。
+    それから、新しいジェネレータで再度 random を呼び出し、2 つ目のコイントスの結果を得る。
+    3 つ目のコインも同様にする。
+
+    *Main System.Random> threeCoins $ mkStdGen 100
+    (True,False,False)
+    *Main System.Random> threeCoins $ mkStdGen 10
+    (True,True,True)
+-}
+
+--- ¶　ランダムな関数をもっと
+{-
+    もっとたくさんのコインを投げたいときはどうすればいいだろうか？　そのために randoms という関数がある。
+    これは、ジェネレータを受け取って、そのジェネレータに基づく無限長のランダムな値のリストを返す関数である。
+
+    *Main System.Random> take 5 $ randoms (mkStdGen 11)
+    [5260538044923710387,4361398698747678847,-8221315287270277529,7278185606566790575,1652507602255180489]
+
+    *Main System.Random> take 5 $ randoms (mkStdGen 11) :: [Bool]
+    [True,True,True,True,False]
+
+    *Main System.Random> take 10 $ randoms (mkStdGen 11) :: [Float]
+    [0.26201087,0.1271351,0.31857032,0.1921351,0.31495118,0.866733,0.10540885,8.465308e-2,0.4563836,0.4733292]
+
+    なぜ randoms はリストと一緒に新しいジェネレータを返さないのだろうか？
+    randoms 関数は次のようにとても簡単に実装できる。
+-}
+
+randoms' :: (RandomGen g, Random a) => g -> [a]
+randoms' gen = let (value, newGen) = random gen in value: randoms' newGen
+
+{-
+    これは再帰的な定義である。ランダムな値と新しいジェネレータを受け取ってその値を head に、新しいジェネレーターで作ったリストを残りの要素としてリストを作る。
+    この関数には無限の長さのリストを生成できて欲しいので新しい乱数ジェネレーターを返してもらうことはできない。
+    有限のリストと新しいジェネレーターを生成する関数なら作れる。
+-}
+
+finiteRandoms :: (RandomGen g, Random a, Num n, Eq n) => n -> g -> ([a], g)
+finiteRandoms 0 gen = ([], gen)
+finiteRandoms n gen =
+    let (value, newGen) = random gen
+        (restOfList, finalGen) = finiteRandoms (n-1) newGen
+    in (value:restOfList, finalGen)
+
+{-
+    これもまた再帰的定義になっている。0 個の数を生成したいとしたら、単純に空のリストと与えられたジェネレータをそのまま返す。
+    それ以外の個数のランダムな値を返す場合は、まず乱数を 1 つとジェネレータを生成する。
+    この数が head の要素になる。それから新しいジェネレータを使って n-1 個の整数を生成し、リストの残りの部分とする。
+    これらをくっつけたものと最終的なジェネレータをペアにして結果として返す。
+
+    *Main System.Random> finiteRandoms 0 (mkStdGen 10)
+    ([],11 1)
+    *Main System.Random> finiteRandoms 1 (mkStdGen 10)
+    ([-2774747785423059091],1925364037 2103410263)
+    *Main System.Random> finiteRandoms 5 (mkStdGen 10)
+    ([-2774747785423059091,-5364865979222864935,5005192715100199576,-2238708107678760508,-1609484772912886991],299355613 2118231989)
+
+    ある範囲の乱数を生成したい場合はどうすればいいだろうか？
+    ある数より小さい整数の乱数全部、というのでは、欲しい数に対して大き過ぎたり小さ過ぎたりする。
+    サイコロを投げたい場合は？
+    これには randomR を使う。型は次のようになっている。
+        randomR :: (Random a, RandomGen g) => (a, a) -> g -> (a, g)
+    random に似ているが、1 つ目の引数として上限と下限のペアを受け取り、その範囲内の値を生成する。
+
+    *Main System.Random> randomR (1,6) (mkStdGen 1)
+    (6,80028 40692)
+
+    *Main System.Random> randomR (1,6) (mkStdGen 333333333929434)
+    (3,469120347 40692)
+
+    randomRs 関数も同じく用意されていて、指定された範囲の乱数を無限に生成する。
+
+    *Main System.Random> take 10 $ randomRs ('a', 'z') (mkStdGen 3)
+    "xnuhlfwywq"
+-}
+
+--- ¶　ランダム性と I/O
+{-
+    ここまでは乱数ジェネレータに手作業で適当な整数を与えていた。これでは現実の問題を扱うには不十分である。
+    プログラムが返すのは毎回同じ乱数になってしまう。この動作は望ましくない。
+    これを解決するために、System.Random は getStdGen という IO StdGen 型の I/O アクションを提供している。
+    このアクションは、なんらかの初期データを使ってシステムの **グローバル乱数ジェネレータ** を初期化する。
+    getStdGen はそのグローバル乱数ジェネレータを返す。
+
+    グローバル乱数ジェネレータを使ってランダムな文字列を生成するシンプルなプログラムの例を示す。
+-}
+
+-- import System.Random
+main_rndm :: IO ()
+main_rndm = do
+    gen <- getStdGen
+    putStrLn $ take 20 (randomRs ('a', 'z') gen)
+
+    {- 試してみると以下のようになる
+    *Main System.Random> main_rndm
+    axcrffbpargzngjrmhvr
+
+    GHCi を再起動すると、、（再起動せずに main_rndm を再度実行しても同じ結果になる）
+    *Main> main_rndm
+    endjmjoynktidwhqydgt
+    -}
+
+{-
+なお、getStdGen を 2 回実行しても（プログラム内で getStdGen を 2 箇所に記述しても）、システムは同じグローバル乱数ジェネレータを 2 回返すだけである。
+2 つの異なる文字列を得るベストな方法は、現在の乱数ジェネレータを 2 つのジェネレータに分割する、newStdGen アクションである。
+このアクションは、グローバル乱数ジェネレータを分割した片方で置き換え、もう片方を結果として返す。
+-}
+
+-- import System.Random
+
+main_rndm' :: IO ()
+main_rndm' = do
+    gen <- getStdGen
+    putStrLn $ take 20 $ randomRs ('a', 'z') gen
+    gen2 <- newStdGen
+    putStrLn $ take 20 $ randomRs ('a', 'z') gen2
+
+{-
+    newStdGen を束縛すると、新しい乱数ジェネレータが得られるだけでなく、グローバルジェネレータも更新される。
+    これは、getStdGen を再度実行して何かに束縛すると gen に異なるジェネレータが得られることを意味する。
+    （main_rndm の場合（gen <- getStdGen 1 つだけで、newStdGen は使用せず）、GHCi を再起動しない限り、何回 main_rndm を実行しても結果は同じ。
+    main_rndm' の場合は、実行のたびに、（newStdGen を使って得たランダム値のみならず）getStdGen を使って得たランダム値も変わる）
+
+    次のコードは、ユーザにプログラムが考えた数を当てさせるプログラムである。
+-}
+
+-- import System.Random
+-- import Control.Monad(when)
+
+main_a4n :: IO ()
+main_a4n = do
+    gen <- getStdGen
+    askForNumber gen
+
+askForNumber :: StdGen -> IO ()
+askForNumber gen = do
+    let (randNumber, newGen) = randomR (1::Int, 10::Int) gen --として、1 と 10 に注釈入れるか、この式全体の右に👉のように注釈を入れる。 :: (Int, StdGen)
+    putStrLn "Which number in the range from 1 to 10 am I thinking of? "
+    numberString <- getLine
+    when (not $ null numberString) $ do
+        let number = read numberString
+        if randNumber == number
+            then putStrLn "You are correct!"
+            else putStrLn $ "Sorry, it was " ++ show randNumber
+        -- newGen <- newStdGen -- ↓ の main_a4n' でやっているように、newStdGen を使ってもいいけど、あんまり意味がない（let (randomNumber, newGen) = ...の newGen を使うで十分だから、
+        --                          わざわざ無意味に新しい乱数ジェネレータをここで取得する必要はない。main_a4n' は、main_a4n' 内のコメントで説明するように、新しい乱数ジェネレータをこの部分で得る必要がある）
+        askForNumber newGen
+{-
+    read が parse できない文字列（"haha" のような）をユーザーが入力した場合、プログラムはクラッシュする。
+    そういう入力に対してプログラムがクラッシュしないようにしたいなら、文字列の parse に失敗したときに空のリストを返す reads を使おう。
+    成功すると望みの値と食べ残しの文字列のペアからなる単一要素のリストを返す。
+    （reads の使い方よくわからないけどいったん省略）
+-}
+
+--- 上記のコードは以下のように、すべて main でやっちゃうようにも実装できる（でも、↑のほうが推奨）。
+main_a4n' :: IO ()
+main_a4n' = do
+    gen <- getStdGen
+    let (randNumber, _) = randomR (1::Int, 10::Int) gen -- 全部 main でやっちゃうわけで、main は引数を取らないので、
+                                                        -- ここで newGen を作ったところでそれを main newGen みたいな形で与えられないから、ここで生成される新しい乱数ジェネレータは捨てる
+    putStrLn "Which number in the range from 1 to 10 am I thinking of? "
+    numberString <- getLine
+    when (not $ null numberString) $ do
+        let number = read numberString
+        if randNumber == number
+            then putStrLn "You are correct!"
+            else putStrLn $ "Sorry, it was " ++ show randNumber
+        _ <- newStdGen -- ここでグローバル乱数ジェネレータを更新。newStdGen を呼び出せば getStdGen から得られるジェネレータも更新されるから、newStdGen 自体から得られる StdGen 自体は _ に束縛（つまり捨てる）でよい。
+        main_a4n'
+
