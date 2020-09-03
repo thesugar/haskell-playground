@@ -961,3 +961,185 @@ main_a4n' = do
         _ <- newStdGen -- ここでグローバル乱数ジェネレータを更新。newStdGen を呼び出せば getStdGen から得られるジェネレータも更新されるから、newStdGen 自体から得られる StdGen 自体は _ に束縛（つまり捨てる）でよい。
         main_a4n'
 
+-------------------------------
+--　bytestring
+-------------------------------
+
+{-
+    リストは便利である。リストに対して動作する関数はたくさんあるし、Haskell の遅延評価のおかげで、
+    リストに対するフィルタやマップとして他の言語における for や while ループが書ける。
+    本当に必要とされたときにのみ評価されるので、無限リスト（無限リストの無限リストさえも！）のようなものを扱うのも造作はない。
+    このため、リストをストリームとして扱うことができる。
+    標準入力から読み込むときも、ファイルから読み込むときも、ファイルを開き、それを文字列として読むだけである。
+    実際のファイルアクセスは必要になってから行われる。
+
+    しかし、ファイルを文字列として処理することには 1 つ難点がある。実行速度が遅くなりがちなのである。
+    リストは本当に怠け者である。[1,2,3,4] は 1:2:3:4:[] の構文糖衣だった。
+    例えばリストを出力すると、最初の要素が無理やり評価されるが、このとき残りのリスト（2:3:4:[]）はまだプロミスのまま。この未評価の部分をサンク（thunk）と呼ぶ。
+    サンクというのは、要するに遅延された計算のことである。
+    Haskell の遅延評価は、前もってすべてを計算するのではなく、サンクを使ってそれを必要なときのみ計算することで実現されている。
+    したがって、リストはプロミスだと考えられる。それも、必要になると初めて次要素と後続のプロミスを渡してくれるようなプロミスである。
+    単なる数のリストをサンクの列として処理するのは、どう考えても効率の面でベストではなかろう。
+
+    大きなファイルを読んだり、操作しようとしたときに、多くの場合このオーバーヘッドが問題になるのである。これが Haskell に bytestring が存在する理由である。
+    bytestring はリストに似たデータ構造で、要素は 1 バイト（8 ビット）のサイズ固定である。bytestring では遅延評価を扱う方法も異なる。
+-}
+
+-- ¶　正格 bytestring と 遅延 bytestring
+{-
+    bytestring には「正格」なものと「遅延」なものがある。正格 bytestring は Data.ByteString で提供されていて、遅延性が完全に排除されている。サンクは一切ない。
+    正格 bytestring は配列上のバイト列として表現される。無限の正格 bytestring のようなものは作れない。
+    正格 bytestring の最初のバイトを評価するなら、全体を評価しなくてはならない。
+
+    一方、遅延 bytestring は Data.ByteString.Lazy で提供される。これは遅延評価されるが、リストほどは遅延されない。
+    リストには、その要素数とちょうど同じくらいの数のサンクがあり、これが場合によってリストが遅くなる原因である。
+    遅延 bytestring では別の方法が採用されている。遅延 bytestring は、64 KB（キロバイト）のチャンク（chunk）という塊に格納されるのである。
+    そして、遅延 bytestring を評価したら（出力するなど）、最初の 64 KB が評価される。
+    残りのチャンクはプロミスである。遅延 bytestring は、64 KB の正格 bytestring からなるリストだとも考えられる。
+    ファイルを遅延 bytestring で処理するときにはチャンク単位で読み込まれる。
+    これが巧妙なのは、メモリ使用量の上昇を抑えつつ、しかも 64 KB は CPU の L2 キャッシュ（L1 キャッシュより下位のキャッシュメモリ）にきちんとフィットするサイズになっているところである。
+
+    Data.ByteString.Lazy のドキュメントをみると、Data.List の関数と同じ名前の関数がたくさん見つかるだろう。
+    これらは [a] の代わりに ByteString を、a の代わりに word8 を受け取る。
+    それらの関数はリストに対して動作する関数に似ている。
+    名前が同じなので、スクリプトでは修飾付きインポートし、しかるのちに GHCi にロードして bytestring を楽しむこととしよう。
+        import qualified Data.ByteString.Lazy as B
+        import qualified Data.ByteString as S
+    こうすれば、B が遅延 bytestring の型と関数、S が正格 bytestring の型と関数になる。ここではもっぱら遅延版を扱う。
+
+        B.pack :: [GHC.Word.Word8] -> B.ByteString
+
+    という型シグネチャを持つ、 (B.)pack という関数がある。これは (GHC.Word.)Word8 のリストを受け取り、ByteString を返す。
+    遅延するリストを受け取り、それよりは怠け者でない 64 KB 間隔で遅延する bytestring を作る関数だと考えればよいだろう。
+
+    Word8 型は Int に似ているが、これは 8 ビット符号無し整数を表す。
+    つまり、0 から 255 という、より小さい範囲の数である。Int と同様に Num 型クラスのインスタンスである。
+    例えば、5（といった整数）は多相的であらゆる数値的な型として振る舞えるが、Word8 としても振る舞えるということである。
+
+    数から bytestring にパックする方法を示す。
+-}
+
+packed :: B.ByteString
+packed = B.pack [99, 97, 110] -- Output: "can"
+
+packed' :: B.ByteString
+packed' = B.pack [98..120] -- "bcdefghijklmnopqrstuvwx"
+
+--- === 🧐 === ---
+{-
+    いろいろわかりづらいが、ここまでの話の流れをまとめると、、
+    「（とりわけファイル操作などにおいて）ファイルの中身を文字列として扱うと、（文字列は Char の "リスト" だから遅延評価されまくって）速度出ないよね」っていう問題意識からスタートした。
+    「文字列 String の代わりに B.ByteString（や S.ByteString）っていう、パフォーマンスを出しやすい型があるから紹介するよー」
+    という流れ。
+    だから ByteString 型は、お気持ち的な理解としては「String 型っぽいもの」。
+    で、数字（Word8）から ByteString を構成することもできるよということ。でも、この下で出てくる「bytestring を使ったファイルのコピー」の例などから見て取れるように、
+    数字（word8）から ByteString を構成するってあまりないんじゃないのかな？（わからないけど）
+    B.readFile とかを使えば、ファイルの内容をそのまま B.ByteString 型として読めてしまうようだし。
+-}
+
+{-
+    数が Word8 であることを明示する必要はない。数がその型になることは、型システムによって強いられるからである。
+    もし 336 のような大きな数を扱おうとすると、オーバーフローして 80 になる。
+
+    bytestring を 1 バイトずつイラベル必要がある場合は unpack する。unpack 関数は pack 関数の逆関数である。
+    bytestring を受け取り、バイトのリストを返す。
+-}
+
+by :: B.ByteString
+by = B.pack [98, 111, 114, 116] -- `by` : "bort"
+
+unpacked :: [GHC.Word.Word8]
+unpacked = B.unpack by -- `unpacked` : [98,111,114,116]
+
+{-
+    正格 bytestring と遅延 bytestring を相互に変換することもできる。
+    toChunks 関数は、遅延 bytestring を受け取り、それを正格 bytestring のリストに変換する。
+    fromChunks 関数は、正格 bytestring のリストを受け取り、それを遅延 bytestring に変換する。
+-}
+
+chunks :: B.ByteString
+chunks = B.fromChunks [S.pack [40, 41, 42], S.pack [43, 44, 45], S.pack [46, 47, 48]] -- "()*+,-./0"
+
+{-
+    小さな正格 bytestring がたくさんあり、それらを連結せずにメモリ上で 1 つの大きな正格 bytestring として効率的に処理したい場合には、
+    このような変換を行うとよいだろう。
+    bytestring 版の : は cons である。これはバイト値と bytestring を受け取り、そのバイト値を先頭にくっつける。
+-}
+
+consed :: B.ByteString
+consed = B.cons 85 $ B.pack [80, 81, 82, 84] -- "UPQRT"
+
+{-
+    bytestring モジュールには、Data.List などで提供されている関数によく似た関数がかなりある。
+    head, tail, init, null, length, map, reverse, foldl, foldr, concat, takeWhile, filter などなど。
+    bytestring パッケージのドキュメント http://hackage.haskell.org/package/bytestring/ にすべての関数が載っている。
+    ※ ちなみに concat の使い方は次のとおり。
+    concat [[1,2],[3,4]]
+    > [1,2,3,4]
+
+    bytestring モジュールには、System.IO モジュールが提供する関数と同様の動作をする関数もある。
+    これらは String の代わりに ByteString を受け取る。
+    例えば、System.IO の readFile 関数は次の型を持っている。
+
+        readFile :: FilePath -> IO String
+
+    bytestring モジュールの readFile 関数は次の型を持つ。
+
+        readFile :: FilePath -> IO ByteString
+
+    > 正格 bytestring を使ってファイルを読もうとすると、そのファイルの内容すべてがメモリ上に一度に読まれる。
+    > 遅延 bytestring なら、こぢんまりとしたチャンクごとに読まれる。
+-}
+
+--- ¶　bytestring を使ったファイルのコピー
+{-
+    コマンドライン引数から 2 つのファイル名を受け取って、1 つ目のファイルを 2 つ目のファイルにコピーするプログラムを作ろう。
+    System.Diretory には copyFile という関数がすでにあるが、とにかく独自のファイルコピー関数を実装してみよう。
+
+    ```/io/bytestring.hs
+    import System.Environment
+    import System.Directory
+    import System.IO
+    import Control.Exception
+    import qualified Data.ByteString.Lazy as B
+
+    main = do
+        (fileName1:fileName2:_) <- getArgs
+        copy fileName1 fileName2
+
+    copy source dest = do
+        contents <- B.readFile source
+        bracketOnError
+            (openTempFile "." "temp")
+            (\(tempName, tempHandle) -> do
+                hClose tempHandle
+                removeFile tempName)
+            (\(tempName, tempHandle) -> do
+                B.hPutStr tempHandle contents
+                hClose tempHandle
+                renameFile tempName dest)
+    ```
+
+    はじめに main でコマンドライン引数を取得したら、copy 関数（組み込みの関数ではなく、自分で定義するもの）を呼び出すだけ。
+    単にファイルを読みおk味、もう片方のファイルに書き込めばコピーはできるが、何かまずいことが起こると（コピーするのにディスクの空きが足りないなど）、おかしなファイルが残ってしまう。
+    そこで、いったん一時ファイルに書き込むことにする。何かおかしなことが怒っても、そのファイルを消すだけで済む。
+
+    最初に、B.readFile を使ってコピー元ファイルの内容を読む。それから bracketOnError を使ってエラーハンドラをセットアップする。
+    リソースの獲得は　openTempFile "." "temp" である。一時ファイルの名前とそのハンドルのタプルが返される。
+    次に、エラーが怒ったときに何をすべきかを書く。
+    まずいことが起こったら、ハンドルを閉じ、一時ファイルを削除する。
+    最後がコピー処理の本体。B.hPutStr を使って内容を一時ファイルに書き出す。
+    一時ファイルを閉じて、それをコピー先ファイル名に変更したら、望みの処理が完了である。
+
+    readFile と hPutStr の代わりに B.readFile と B.hPutStr を使っただけ、というのがポイントである。
+    ファイルを開いたり閉じたり、ファイル名を変更したりするのに、bytestring 用の特別な関数を使っていない。
+    bytestring の関数を必要とするのは読み書きのときだけである。
+
+    bytestringを使わないプログラムも、だいたい同じような感じになる。
+    唯一の違いはやはり readFile と writeFile の代わりに B.readFile と B.writeFile を使っていることだけである（原文ママ。writeFile なんて出てきていないけど）。
+    普通の文字列を使ったプログラムを bytestring を使った物に置き換えるには、多くの場合、単に修飾付きインポートして対応する関数の前にモジュール名を付け足すだけ。
+    文字列に対して動作する関数を bytestring で動作するように書き換える必要が出てくることはあるが、難しくはない。
+
+    たくさんのデータを文字列として読み込むプログラムで、より良いパフォーマンスを必要とするなら、bytestrin を試してみよう。
+    とても少ない労力でパフォーマンスを向上できるチャンスである。
+-}
