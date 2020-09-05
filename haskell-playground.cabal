@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 7e0537e8eb6115284fbdfcc7db979f91e407ee328702646e5675838dcc43fbe3
+-- hash: d65b0029ad6c19cc7b39091b745e41a98dde0a8765b0ab080653591bf1580266
 
 name:           haskell-playground
 version:        0.1.0.0
@@ -27,7 +27,12 @@ source-repository head
 
 library
   exposed-modules:
+      Geometry
+      Geometry.Cube
+      Geometry.Cuboid
+      Geometry.Sphere
       Lib
+      Shapes
   other-modules:
       Paths_haskell_playground
   hs-source-dirs:
