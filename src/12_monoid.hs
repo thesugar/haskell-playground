@@ -174,3 +174,139 @@ pair1 = getPair $ fmap (*100) (Pair (2, 3)) -- (200, 3)
 pair2 :: (String, Int)
 pair2 = getPair $ fmap reverse (Pair ("london calling", 3)) -- ("gnillac nodnol",3)
 
+--- ¶　newtype と遅延評価
+{-
+    newtype でできるのは、既存の型を新しい型に変えることだけである。
+    だから Haskell は、newtype で作った型と元の型を型としては区別しつつ、同一の内部表現で扱っている。
+    これは、newtype は data より高速で処理されるだけでなくパターンマッチがより怠惰になることを意味する。
+
+    Haskell はデフォルトで遅延評価な言語である。つまり、関数の結果を実際に表示しろと言われるまでは、Haskell は計算を始めない。
+    さらに Haskell は、関数の結果を表示するのにどうしても必要な部分の計算しか行わない。
+    さて、undefined はぶっ壊れた計算を表す Haskell の値である。
+    もし、端末に表示させるなどして、Haskell に undefined を評価させようとすると（つまり、どうしても undefined を計算させようとすると）、Haskell は例外を投げる。
+
+    *Main> undefined 
+    *** Exception: Prelude.undefined
+    CallStack (from HasCallStack):
+    error, called at libraries/base/GHC/Err.hs:80:14 in base:GHC.Err
+    undefined, called at <interactive>:254:1 in interactive:Ghci3
+
+    ところが、例えば undefined を要素に含むリストを作っても、その先頭要素を要求するだけなら、その先頭要素さえ undefined でなければ、
+    すべてがうまくいってしまう。というのも、Haskell は先頭要素以外のリストの要素を評価する必要がないので、評価しないからである。
+
+    たとえば次のとおり。
+
+    *Main> head [1, undefined]
+    1
+
+    さて、ここで以下のような型を作ったとする。
+-}
+
+data CoolBool = CoolBool { getCoolBool :: Bool}
+
+{-
+    これは data キーワードで作った、いかにもありふれた代数データ型である。
+    CoolBool 型には 1 つの値コンストラクタ CoolBool があり、それには 1 つのフィールドがあって、中身は Bool 型である。
+    さて、CoolBool 型をパターンマッチして、中身の Bool が True であるか False であるかによらず "hello" を返す関数を書いてみよう。
+-}
+
+helloMe :: CoolBool -> String
+helloMe (CoolBool _) = "hello"
+
+{-
+    ではこの関数を、正常な CoolBool 値でなく undefined に適用してみよう。
+-}
+
+udfd :: String
+udfd = helloMe undefined
+    -- > udfd
+    -- "*** Exception: Prelude.undefined
+
+{-
+    例外発生！！　どうしてこの例外が出たのだろうか？
+    それは、data キーワードで定義された型には複数の値コンストラクタがあるかもしれず（CoolBool にはたまたま 1 つしかないが）、
+    helloMe 関数に与えられた引数が (CoolBool _) に合致するかどうかを確認するためには、どのコンストラクタが使われたのかわかるところまで引数の評価を進める必要があるからである。
+    （helloMe 関数の定義に出てくる helloMe (CoolBool _) = "hello" の CoolBool は型名でなく値コンストラクタ（つまり、CoolBool = Hoge { getHoge :: Bool } なら helloMe (Hoge _) = と書くことになる）。
+    だから、data で型を定義した場合には data CoolBool = CoolBool | Hoge | Fuga のように値コンストラクタが複数ある場合もあって、そうした場合を想定すると、
+    helloMe (CoolBool _) というパターンと一致しているかどうか判定するにはどの値コンストラクタを使っているか評価を進める必要があるということ。
+    （CoolBool でなく Hoge や Fuga という値コンストラクタかもしれないから。）
+
+    そして、undefined を少しでも評価しようものなら、例外が発生するのである。
+    では、CoolBool を作るのに、data ではなく newtype を使ったらどうだろう？
+-}
+
+newtype CoolBool' = CoolBool' { getCoolBool' :: Bool }
+
+-- helloMe 関数の実装は（変数名の ' を除いて）不変
+helloMe' :: CoolBool' -> String
+helloMe' (CoolBool' _) = "hello"
+
+udfd' :: String
+udfd' = helloMe' undefined -- udfd' は "hello" になる！
+
+{-
+    今度は動いた！
+    これまでに学んだとおり、newtype を使ったときは、Haskell は新しい型の値も元の型の値も内部的には同じ表現を使う。
+    新しい型に対して箱を追加するような処理はしていないし、ただ異なる型だと認識しているだけである。
+
+    そして Haskell は、newtype キーワードはコンストラクタを 1 つしか作れないと知っているので、
+    helloMe' 関数の引数を評価することなく、引数が (CoolBool' _) パターンに合致すると判定できる。
+    なぜなら newtype には値コンストラクタもフィールドも 1 つずつしかないからである。
+
+    いま紹介した事例は些細な違いに思えるかもしれないが、これは実に重要な違いである。
+    この例が示しているのは、data キーワードで定義した型と newtype キーワードで定義した型はプログラマの視点からはそっくりに見えるかもしれない
+    （どちらも値コンストラクタとフィールドがある）けれども、実際には 2 つの異なったメカニズムだということである。
+    data はオリジナルな型を無から作り出すものである。これに対し newtype は、既存の型をもとに、はっきり区別される新しい型を作るものである。
+    data に対するパターンマッチが箱から中身を取り出す操作なのに対し、newtype に対するパターンマッチは、ある型を別の型へ直接変換する操作なのである。
+-}
+
+--- ¶ type vs. newtype vs. data
+{- あらためて、type と newtype と data の違いを整理しておこう。-}
+
+-- 1️⃣ type キーワード
+-- 型シノニムを作るためのもの。既存の型に別名をつけて、呼びやすくするのである。
+type IntList = [Int]
+
+-- こうすると、[Int] 型を IntList 型とも呼べるようになる。2 つの呼び名は自由に交換できるようになる。それだけ。
+-- IntList 型の値コンストラクタとか、そういう類のものは一切生じない。
+
+ints :: IntList
+ints = ([1,2,3] :: IntList) ++ ([10,20,30] :: [Int]) -- [1,2,3,10,20,30]
+
+{-
+    型シノニムは、型シグネチャを整理してわかりやすくしたいときに使う。
+    特定のものを表すために複雑な型を作ることがあるが、その型に名前をつければ、その型をどういう目的で使っているのかをコードを読む人に伝えられる。
+    例えば第 7 章では、電話帳を表現するために [(String, String)] 型の連想リストを使った。
+    そして、それに PhoneBook という型シノニムをつけることで、電話帳を扱う関数の型シグネチャを読みやすくした。
+-}
+
+
+-- 2️⃣ newtype キーワード
+-- newtype キーワードは、既存の型をくるんで新しい型を作るためのもの。newtype は、もっぱら型クラスのインスタンスを作りやすくするために使われる。
+-- newtype を使って既存の型を包むことにより出来上がる型は、元の型とは別物になる。次の例を見てみよう。
+newtype MojiList = MojiList { getMojiList :: [Char] }
+
+{-
+    このとき、CharList と [Char] を ++ で連結することはできない。また、2 つの CharList を ++ で連結することすらできない。
+    なぜなら、++ はリスト限定の演算子であり、CharList はリストを中身に持っているとはいえ、リストそのものではないからである。
+    しかし、CharList をいったんリストに変換したうえで ++ して、また CharList に戻すことならできる（それはそう）。
+
+    newtype 宣言でレコード構文を使うと、新しい型と元の型を相互変換する関数が作られる。
+    具体的には、newtype の値コンストラクタと、フィールド内の値を取り出す関数である。
+    新しい型は、元の型の所属していた型クラスを引き継がないので、deriving で導出するか、インスタンス宣言を手書き（instance SomeClass TypeName where）する必要がある。
+    （あるいは GeneralizedNewtypeDeriving を使う）
+
+    newtype 宣言は、値コンストラクタが 1 つだけ、フィールドも 1 つだけという制限のついた data 宣言だとみなしても実用上は問題ない。
+    もし自分が書いたコードにそんな data 宣言を見つけたら、newtype で代用できないか考えてみるとよいだろう。
+-}
+
+-- 3️⃣　data キーワード
+-- 自作の新しいデータ型を作るためのもの。
+-- data を使えば、フィールドとコンストラクタを山ほど備えたどんな途方もないデータ型だろうと作り出せる。
+-- リストや Maybe のような型も、木も、何でも。
+
+-- 🎉 まとめ 🍷
+---- 型シグネチャを整理したいとか、「（型）名は体を表す」ようにしたいだけなら、型シノニムを使うとよかろう。
+---- 既存の型をある型クラスのインスタンスにしたくて、新しい型にくるむ方法を探しているなら、newtype がぴったり！
+---- 何かまったく新しいものを作りたい場合には、data が向いている！
+
