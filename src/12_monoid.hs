@@ -310,3 +310,213 @@ newtype MojiList = MojiList { getMojiList :: [Char] }
 ---- 既存の型をある型クラスのインスタンスにしたくて、新しい型にくるむ方法を探しているなら、newtype がぴったり！
 ---- 何かまったく新しいものを作りたい場合には、data が向いている！
 
+-------------------------------
+--　Monoid 大集合
+-------------------------------
+{-
+    Haskell の型クラスは、同じ振る舞いをする型たちに共通のインターフェイスを提供するために使われている。
+    最初に紹介したのは、等号が使える型のクラスである Eq や、順序が付けられる Ord といった単純なものだった。
+    それから、Functor や Applicative のような、もっと面白い型クラスを見てきた。
+
+    新しい型を作る人は、「この型には何ができるだろう？　どんな操作をサポートするだろう？」と考えて、
+    その型に欲しい機能をもとに、どの型クラスのインスタンスを実装するか決める。
+    もしその型の値どうしの等号を定義することに意味があるなら、Eq のインスタンスにする。もしその型が何らかのファンクターになっっているなら Functor のインスタンスにする、などなど。
+
+    さて、こんなことを考えてみよう。* は 2 つの数を取って掛け算をする関数である。
+    そして、何かと 1 を掛け算すると、結果は常に元の数である。
+    1 * x とやっても、x * 1 とやっても、結果は x である。
+    次に、関数 ++ を考える。数の掛け算と 2 つのリストの連結は全然別種の操作に思えるが、2 つのものを取って 1 つを返すという点では同じ。
+    しかも、++ には * と同じように、演算しても相手を変えない値（単位元！）がある。それは空リスト [] である。
+
+    どうやら、* に 1 という組み合わせと、++ に [] という組み合わせは、共通の性質を持っているようだ。
+        - 関数（ここでは `*` や `++`）は引数を 2 つ取る
+        - 2 つの引数および返り値の型はすべて等しい
+        - 2 引数関数を施して相手を変えないような特殊な値（ここでは `1` と `[]`）が存在する
+
+    よく観察すると、ほかにも共通の性質が見つかる。この関数を使って 3 つ以上の値を 1 つの値にまとめる計算をするとき、
+    値の間に関数を挟む順序を変えても結果は変わらない、という性質である。
+        (3 * 2) * (8 * 5) == 3 * (2 * 8) * 5
+        "la" ++ ("di" ++ "ga") == ("la" ++ "di") ++ "ga"
+
+    この性質を結合的（associativity）と呼ぶ。演算 * と ++ は結合的であると言う。
+    結合的でない演算の例は - である。例えば (5 - 3) - 4 と 5 - (3 - 4) は異なる結果んある。
+
+    以上の性質に気づいたなら、……モノイドに出会ったのである！
+-}
+
+--- ¶　Monoid 型クラス
+
+{-
+    モノイドは、結合的な二項演算子（2 引数関数）と、その演算に関する単位元からなる構造である。
+    ある値がある演算の単位元であるとは、その値と何か他の値を引数にしてその演算を呼び出したとき、返り値が常に他の値のほうに等しくなる、ということである。
+    1 は * の単位元であり、[] は ++ の単位元である。
+    Haskell の世界では、ほかにも無数のモノイドがあるので、Monoid 型クラスが用意されている。
+    Monoid の定義を見てみよう。
+
+    class Monoid m where
+        mempty :: m
+        mappend :: a -> a -> a
+        mconcat :: [a] -> a
+
+    まず、Monoid のインスタンスになれるのは具体型だけだとわかる。型クラス定義に現れる m が型引数を取っていないからである。
+    この点で Monoid は、Functor や Applicative のような、1 つの型引数を取る型コンストラクタがインスタンスになる型クラスとは違っている。
+
+    最初の関数は mempty である。いや、引数を取らないので関数ではない。
+    mempty は多相定数である。Bounded の minBound みたいなもの。
+    mempty は、そのモノイドの単位元を表す。
+
+    次は mappend である。これは、モノイド固有の二項演算である。mappend は同じ型の引数を 2 つ取り、その型の別の値を返す。
+    この関数の名前を mappend にしたのはちょっと残念。。何かを付け足す（append）という意味になってしまうから。
+    ++ は確かに 2 つのリストを継ぎ足す操作だが、* には付け足すというような雰囲気は皆無だし、Monoid の他のインスタンスを見ても「付け足し」のような雰囲気はあまりない。
+    それゆえ、mappend を「付け足す」と考えるのはやめて、単に 2 つのモノイド値を取って第三の値を返す関数とみなすようにしよう。
+
+    最後の関数は mconcat である。これはモノイドのリストを取って mappend 間に挟んだ式を作り、単一の値を計算してくれる関数である。
+    mconcat には、mempty を初期値に取り、リストを mappend で右畳み込みしていくというデフォルト実装がついている。
+    ほとんどのモノイドに関してはこのデフォルト実装で十分なので、mconcat に関してはこれ以上深入りはしない。
+    自分で Monoid 型クラスのインスタンスを作る時も mempty と mappend だけを実装すれば動く。
+-}
+
+--- ¶　モノイド則
+{-
+    📚モノイドが満たすべき法則
+
+        - mempty `mappend` x = x
+        - x `mappend` mempty = x
+        - (x `mappend` y) `mappend` z = x `mappend` (y `mappend` z)
+
+    はじめの 2 つの法則は、mempty が mappend に関して単位元として振る舞う必要があることを述べている。
+    第三の法則は、mappend が結合的であること、つまり複数の mappend で連結された式から 1 つの値を計算するとき、mappend を評価する順序は最終結果に影響しないことを述べている。
+    Haskell はこれらの法則を強制しないので、インスタンスが実際にこれらの法則を満たすよう気を付けるのはプログラマの責任になる。
+-}
+
+-------------------------------
+--　モノイドとの遭遇
+-------------------------------
+
+-- ¶　リストはモノイド
+{-
+    関数 ++ と空リスト [] がモノイドを成す。インスタンス宣言はとてもシンプル。
+
+    instance Monoid [a] where
+        mempty = []
+        mappend = (++)
+
+    リストは、中身の型が何であっても常に Monoid のインスタンスにできる。
+    インスタンス宣言が instance Monoid [] ではなく instance Monoid [a] となっているのは、Monoid のインスタンスは具体型と決まっているからである。
+
+        *Main Control.Applicative> [1,2,3] `mappend` [4,5,6]
+        [1,2,3,4,5,6]
+
+        *Main Control.Applicative> ("one" `mappend` "two") `mappend` "three"
+        "onetwothree"
+
+        *Main Control.Applicative> "one" `mappend` "two" `mappend` "three"
+        "onetwothree"
+
+        *Main Control.Applicative> "pang" `mappend` mempty 
+        "pang"
+
+        *Main Control.Applicative> mconcat [[1,2],[3,6],[9]]
+        [1,2,3,6,9]
+
+        *Main Control.Applicative> mempty :: [a]
+        []
+
+    最後の行には型注釈を明記してある。単に mempty とだけ書いても、どのインスタンスを使ってよいか GHCi にはわからないので、
+    「ここではリストのインスタンスを使いたい」と伝える必要がある。
+    ただし、[Int] や [String] ではなく、一般的な [a] という型でかまわない（[Int] や [String] で型注釈しても同じように [] が返ってくるけど）。
+    空リストは任意の型を格納しているかのように振る舞えるからである。
+
+    mconcat にはデフォルト実装が指定されているので、Monoid のインスタンスを作れば mconcat は勝手についてくる。
+    リストの場合、mconcat は実はただの concat である。
+    mconcat は二重リストを取って、その要素を連結した平らなリストを返す。というのも、二重リストの中の隣接するリストをみな ++ で結ぶとそうなるからである。
+
+    リストは確かにモノイド則を満たす。
+    複数のリストがあって、それを mappend、つまり ++ で結合していった結果は、どこから結合し始めても一緒だよね。
+    なぜなら最後にはどのみちすべてが結合するわけだから。
+    空リストが単位元であることもわかる。以上である。
+
+    ところで、モノイド即は a `mappend` b と b `mappend` a が等しいこと（交換性）は要請していないことに気をつけて（※要請しているのは結合性）。
+    リストの場合、これは明らかに成り立たない。（"hoge" ++ "fuga" と "fuga" ++ "hoge" は違う）
+    でもこれで問題ない。 3 * 5 と 5 * 3 は確かに同じだが、それは掛け算の性質であって、すべてのモノイドがこの性質を満たすわけではない。
+    実際、満たさないモノイドがほとんど。
+-}
+
+--- ¶　Product と Sum
+{-
+    数をモノイドにする方法の 1 つはすでに紹介した。* を二項演算にして 1 を単位元にする、という方法である。
+    ほかにも、+ を演算にして 0 を単位元にするという方法もある。
+    0 は加法（足し算）に関する単位元であるし、加法は結合法則も満たすから、モノイド則が成り立っている。
+
+    さて、数をモノイドにする 2 つの方法からどちらを選べばよいだろう？　実は、1 つだけ選ぶ必要はない。
+    ある型に対して同じ型クラスのインスタンスを複数定義したかったら、newtype に包んで新しい型をインスタンスにするという方法があった。
+    二兎を追って両方を捕まえることができるのである。
+
+    Data.Monoid モジュールは、この用途のために、Product と Sum という 2 つの型をエクスポートしている。
+    （当たり前だけど、リストの和や積を計算する sum 関数や product 関数とは別物）
+
+    Product の定義は以下。
+
+        newtype Product a = Product {getProduct :: a}
+            deriving (Eq, Ord, Read, Show, Bounded)
+
+    newtype ラッパーと導出したインスタンスがいくつかあるだけである。
+    Product の Monoid インスタンスは次のような感じ:
+    （Product はすでにあるので、ここでの実装例のネーミングは Product' にする）
+-}
+
+newtype Product' a = Product' { getProduct' :: a }
+    deriving (Eq, Ord, Read, Show, Bounded)
+
+instance Num a => Monoid (Product' a) where
+    mempty = Product' 1
+    -- mappend = (<>) ...Semigroup の演算子(<>)と規定で同じ定義になるため、省略可能
+
+instance Num a => Semigroup (Product' a) where
+    (Product' x) <> (Product' y) = Product' (x * y)
+
+-- 💡すごいH本の書き方とはちょっと違う（いろいろ仕様が変わったっぽい）
+-- 参考
+-- https://qiita.com/kurunin52/items/c555f30b4ea7362d3cf1#monoid%E3%82%A4%E3%83%B3%E3%82%B9%E3%82%BF%E3%83%B3%E3%82%B9%E3%81%AE%E5%AE%9A%E7%BE%A9%E6%96%B9%E6%B3%95
+-- https://kazu-yamamoto.hatenablog.jp/entry/20180306/1520314185
+-- https://blog.miz-ar.info/2019/02/monoid-for-haskellers/#Semigroup-Monoid_ProposalGHC_82
+
+{-
+    Product モノイドの mempty は、ただの 1 を Product コンストラクタにくるんだものである。
+    mappend は、Semigroup のインスタンス宣言における <> の定義に準ずる。
+    <> は、Product をパターンマッチしており、中身の数を掛け算してそれをまたコンストラクタにくるんでいる。
+    そして、見ての通り、Num a という型クラス制約がついている。
+    すでに Num のインスタンスであるようなすべての型 a について、Product a は Semigroup のインスタンスになり、ひいては Monoid のインスタンスになるということ。
+    Product a をモノイドとして使うには、newtype に包んだりほどいたりする必要がある。
+
+    ⭐️  すごい H 本には Semigroup に関する記述が出てこない。
+        すごい H 本では、newtype で作成した新しい型 Product を Monoid 型クラスのインスタンスにしようと思ったら
+        そのまま mempty と mappend を実装するだけでよかったが、現在は少し異なる。
+        mempty はそのまま実装できるが、mappend を実装するにあたってはまず Product を Semigroup 型クラスのインスタンスにして、
+        連結演算子 <> の実装を書く。
+        そうしたら、Monoid 型クラスにおける mappend は自動的に <> と等しい処理を行うようになる。
+
+    *Main Data.Monoid> getProduct $ Product 3 `mappend` Product 9
+    27
+    *Main Data.Monoid> getProduct $ Product 3 `mappend` mempty 
+    3
+    *Main Data.Monoid> getProduct $ Product 3 `mappend` Product 4 `mappend` Product 2
+    24
+    *Main Data.Monoid> getProduct . mconcat . map Product $ [3, 4, 2]
+    24
+    *Main Data.Monoid> getProduct $ Product 3 <> Product 2
+    6
+-}
+
+{-
+    Sum は　Product の近くでまったく同様に定義されていて、インスタンスもよく似ている。使い方も同じ。
+
+    *Main Data.Monoid> getProduct $ Product 3 <> Product 2
+    6
+    *Main Data.Monoid> getSum $ Sum 2 `mappend` Sum 9
+    11
+    *Main Data.Monoid> getSum $ mempty `mappend` Sum 3
+    3
+    *Main Data.Monoid> getSum . mconcat . map Sum $ [1,2,3]
+    6
+-}
