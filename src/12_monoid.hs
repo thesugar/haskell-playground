@@ -520,3 +520,256 @@ instance Num a => Semigroup (Product' a) where
     *Main Data.Monoid> getSum . mconcat . map Sum $ [1,2,3]
     6
 -}
+
+--- ¶　Any と All
+{-
+    モノイドにする方法が 2 通りあって、どちらも捨てがたいような型は、Num a 以外にもある。Bool である。
+    1 つ目の方法は || をモノイド演算とし、False を単位元とする方法である。|| は論理和を表し、2 つの引数のいずれかが True ならば True を返し、そうでなければ False を返す関数である。
+    False を単位元として使えば、確かに || は False を取れば False を返し、True を取れば True を返す。
+    これを踏まえて newtype で Any が定義され、Monoid のインスタンスにされている。
+    Any の定義とインスタンス定義はそれぞれ以下のとおり（Any はすでにあるので、ここでは Any' で実装する）。
+-}
+
+newtype Any' = Any' {getAny' :: Bool}
+    deriving (Eq, Ord, Read, Show, Bounded)
+
+instance Monoid Any' where
+    mempty = Any' False
+
+instance Semigroup Any' where
+    Any' x <> Any' y = Any' (x || y)
+
+{-
+    これが Any と呼ばれるのは、x `mappend` y は x か y のいずれか（any）が True であった場合に True になるからである。
+    Any で包んだ Bool を 3 つ以上 mappend（または <>） した場合も同様で、リストの中居がいずれか 1 つでも True であった場合に全体が True になる。
+
+    *Main Data.Monoid> Any' True
+    Any' {getAny' = True}
+
+    *Main Data.Monoid> Any' True <> Any' False <> Any' False
+    Any' {getAny' = True}
+
+    *Main Data.Monoid> getAny . mconcat . map Any $ [False, False, False, True]
+    True
+-}
+
+{-
+    Bool を Monoid のインスタンスにするもう 1 つの方法は、Any のいわば真逆である。
+    && をモノイド演算とし、True を単位元とする方法である。論理積は、2 つの引数がともに True である場合に限り True を返す。
+    以下がその newtype 宣言とインスタンス定義である。
+-}
+
+newtype All' = All' { getAll' :: Bool }
+    deriving (Eq, Ord, Read, Show, Bounded)
+
+instance Monoid All' where
+    mempty = All' True
+
+instance Semigroup All' where
+    All' x <> All' y = All' (x && y) 
+
+{-
+*Main Data.Monoid> All' True
+All' {getAll' = True}
+
+*Main Data.Monoid> All' True <> All' False
+All' {getAll' = False}
+
+*Main Data.Monoid> getAll' . mconcat . map All' $ [False, True, True, False]
+False
+
+*Main Data.Monoid> getAll' . mconcat . map All' $ [True, True, True, True]
+True
+-}
+
+--- ¶　Ordering モノイド
+{- 
+    Ordering 型は、ものを比較した結果を表すのに使い、LT, EQ, GT という 3 つの値のいずれかを取る型だった。
+    Ordering のモノイドを見抜くのは少し難しいが、しかし Ordering の Monoid インスタンスは、わかってみれば今までのモノイドと同じく
+    ごく自然な定義で、しかも便利なのである。
+
+        instance Monoid Ordering where
+            mempty = EQ
+
+        instance Semigroup Ordering where
+            LT <> _ = LT
+            EQ <> y = y
+            GT <> _ = GT
+
+    このインスタンスは次のような仕組みになっている。
+    2 つの Ordering 値を mappend すると、左辺の値が優先されるが、左辺が EQ である場合は別。
+    左辺が EQ である場合、右辺が返り値になる。単位元は EQ である。
+    最初は場当たり的なルールに見えるかもしれないが、実はこれは文字列を辞書順で比較するときのルールに合わせた定義になっている。
+    2 つの文字列を辞書順比較するときは、まず先頭の文字を比較し、異なっていた場合は直ちに順番が決まる。
+    ところが、先頭の文字が同じだった場合は、次の文字を比較し、……と繰り返す必要がある。
+
+    例えば、ox と on という単語を辞書順で比較するときは、まず先頭の文字を比較し、それらは同じなので 2 文字目の比較に進む。
+    すると、x は n より辞書順が大きいので、単語の順序も ox は on より大きかったことがわかる。
+    EQ が単位元とされているのは、「2 つの単語の同じ位置に同じ文字を挿入しても辞書順は変化しない」ことに対応すると考えれば直感的に理解できよう。
+    （例えば、oix と oin の順番は ox と on に等しいということ）
+
+    Ordering の Monoid インスタンスでは x `mappend` y は y `mappend` x と一致しない、という点も注意が必要。
+    左辺が EQ (=mempty) でない限り左辺が優先されるので、LT `mappend` GT は LT を返すが、GT `mappend` LT は GT を返す。
+
+    *Main Data.Monoid> LT <> GT
+    LT
+    *Main Data.Monoid> EQ <> GT
+    GT
+    *Main Data.Monoid> GT <> LT
+    GT
+    *Main Data.Monoid> mempty <> LT
+    LT
+    *Main Data.Monoid> mempty <> GT
+    GT
+
+    では、このモノイドはどういうときに便利なのだろう？
+    例えば、2 つの文字列を引数に取り、その長さを比較して Ordering を返す関数を書きたいとする。
+    ただし、2 つの文字列の長さが等しいときは、直ちに EQ を返すのではなく、2 つの文字列を辞書順比較することとする。
+    次のように書くのも一つの手だろう。
+-}
+
+lengthCompare_ :: String -> String -> Ordering
+lengthCompare_ x y =
+    let a = length x `compare` length y
+        b = x `compare` y
+    in  if a == EQ then b else a
+
+-- しかし、Ordering はモノイドであるという知識を使えば、この関数はずっとシンプルに書ける。
+-----    => Ordering モノイドのルール：基本的には左辺優先、左辺が EQ の場合は右辺を評価
+
+lengthCompare :: String -> String -> Ordering
+lengthCompare x y = (length x `compare` length y) <> (x `compare` y)
+
+{-
+    mappend（すなわち <>）は、左辺が EQ でなければ左辺、EQ であれば右辺を返すのだった（つまり、「基本的には左辺を使う。左辺で順序が決まらなかったら右辺で評価」）。
+    だから、優劣をつける場合に重視したい比較条件を左辺に置けばよいのである。
+    さて、今度は単語の中の母音の数も比較して、それを 2 番目に重要な条件にしたくなったとしよう。
+    ならば、こう修正すればよい。
+-}
+
+lengthCompare' :: String -> String -> Ordering
+lengthCompare' x y = 
+    (length x `compare` length y) <>
+    (vowels x `compare` vowels y) <>
+    (x `compare` y)
+    where vowels = length . filter (`elem` "aeiou") -- この母音の数を数える補助関数自体もいいね👍
+
+{-
+    *Main Data.Monoid> lengthCompare' "zen" "anna"
+    LT
+    *Main Data.Monoid> lengthCompare' "zen" "ana"
+    LT
+    *Main Data.Monoid> lengthCompare' "zen" "ann"
+    GT
+
+    1 つ目の例では、"zen" のほうが "anna" より短いため、LT が返ってくる。2 つ目の例では、長さは等しいが、2 つ目の文字列のほうが母音が多いため、これも LT が返ってくる。
+    3 つ目の例では、どちらの文字列も同じ長さで母音の数も等しいため辞書順比較が行われ、"zen" のほうが大きい（GT）という結果んある。
+    このように Ordering モノイドは、さまざまな条件でものの大小を比較し、条件そのものに「最も重視すべき条件」から「どうでもいい条件」まで優先順位をつけて最終判定を出すのに使える！
+-}
+
+--- ¶ Maybe モノイド
+{-
+    Maybe a も複数の方法でモノイドになれる。Maybe a がどのような Monoid インスタンスになるのか、どんなことに使えるのか、見ていこう。
+    Maybe a をモノイドにする 1 つ目の方法は、型引数 a がモノイドであるときに限り Maybe a もモノイドであるとし、
+    Maybe a の mappend を、Just の中身の mappend を使って定義することである。
+    Nothing を単位元とし、mappend される 2 つの値のうち片方が Nothing であれば他方の値を使う、とする。
+    以下がインスタンス宣言である。
+
+        instance Monoid a => Monoid (Maybe a) where
+            mempty = Nothing
+        
+        instance Semigroup a => Semigroup (Maybe a) where
+            Nothing <> m = m
+            m <> Nothing = m
+            Just m1 <> Just m2 = Just (m1 <> m2)
+
+    型クラス制約を見てほしい。a が Monoid のインスタンスである場合に限り、Maybe a を Monoid のインスタンスにする、と書いてある。
+    「何か」と Nothing を mappend (<>) した結果は、その「何か」になる。
+    2 つの Just 値を mappend した場合は、2 つの Just の中身を mappend して、また Just の中に入れる。
+    これができるのも、型クラス制約によって Just の中身の型は Monoid のインスタンスであることが保証されているからこそである。
+-}
+
+result1 :: Maybe String
+result1 = Nothing <> Just "andy" -- Just "andy"
+
+result2 :: Maybe Ordering
+result2 = Just LT <> Nothing -- Just LT
+
+result3 :: Maybe (Sum Int)
+result3 = Just (Sum 3) <> Just (Sum 4) -- Just (Sum {getSum = 7})
+
+----------------------------
+--- （※）以下は、Semigroup を使ったスタイルに書き直すために、自分で Maybe っぽい newtype（Maybe っぽいと言っても、
+--- Maybee (Just 10) のように、Maybe 型を引数に取ってコンストラクトされる）Maybee 型を作って実験してみたもの。
+newtype Maybee a = Maybee { getMaybee :: Maybe a}
+    deriving (Show, Read, Eq, Ord)
+
+instance Monoid a => Monoid (Maybee a) where
+    mempty = Maybee Nothing
+
+instance Semigroup a => Semigroup (Maybee a) where
+    Maybee Nothing <> m = m
+    m <> Maybee Nothing = m
+    Maybee (Just m1) <> Maybee (Just m2) = Maybee (Just (m1 <> m2))
+
+{-
+*Main Data.Monoid> Maybee (Just 10)
+Maybee {getMaybee = Just 10}
+*Main Data.Monoid> getMaybee $ Maybee (Just (Sum 3)) <> Maybee (Just (Sum 4))
+Just (Sum {getSum = 7})
+-}
+----------------------------
+
+{-
+    これ（Maybe モノイド）は、失敗するかもしれない計算の返り値をモノイドとして扱いたい場合に便利である。
+    このインスタンスがあるおかげで、ここの計算が失敗したかどうかをいちいち覗き込まずに済む。
+    Nothing か Just かの判定などせずに、そのまま普通のモノイドとして扱ってやればよいのである。
+    でも、Maybe の中身が Monoid のインスタンスではなかったら？
+    そういえば、中身がモノイドであることを利用したのは mappend の中身が Just である場合だけだった。
+    中身がモノイドかどうかわからない状態では mappend は使えない。
+    どうすればいいだろう？　1 つの選択は、第一引数を返して第二引数は捨てる（第一引数・第二引数というのは mappend 関数にとっての、ということで、<> の左辺右辺のこと）、と決めておくことである。
+    この用途のために First a というものが存在する。
+    以下が定義である。
+
+        newtype First a = First { getFirst :: Maybe a }
+            deriving (Eq, Ord, Read, Show)
+
+    Maybe a が newtype で包まれている。Monoid インスタンスは以下である。
+
+        instance Monoid (First a) where
+            mempty = First Nothing
+
+        instance Semigroup (First a) where
+            First (Just x) <> _ = First (Just x)
+            First Nothing <> x = x
+
+    mempty は、ただ単に Nothing を First でっつんだものである。さて、mappend (<>) は、第一引数が Just 値なら第二引数を無視する。
+    （mappend 関数が主語だから第一引数第二引数って言い方だけど、<> の左辺右辺のこと）
+    もし第一引数が Nothing なら、第二引数が Just であろうと Nothing であろうと、それが返り値になる。
+
+    *Main Data.Monoid> getFirst $ First (Just 'a') <> First (Just 'b')
+    Just 'a'
+
+    *Main Data.Monoid> getFirst $ First Nothing <> First (Just 'b')
+    Just 'b'
+
+    *Main Data.Monoid> getFirst $ First (Just 'a') <> First Nothing
+    Just 'a'
+
+    First は、いくつもある Maybe 値にどれか 1 つでも Just があるか調べたいときに役立つ。
+    mconcat 関数が便利である。
+-}
+result4 :: Maybe Int
+result4 = getFirst . mconcat . map First $ [Nothing, Just 9, Just 10] -- Just 9
+
+{-
+    逆に、2 つの Just を mappend したときに後の方の引数を優先するような Maybe a が欲しい、と言う人のために Last a 型も用意されている。
+    これは First a とそっくりな働きをするが、mappend や mconcat を使ったときには Nothing でない最後の値が採用されるというものである。
+-}
+
+result5 :: Maybe Int
+result5 = getLast . mconcat . map Last $ [Nothing, Just 9, Just 10] -- Just 10
+
+result6 :: Maybe String
+result6 = getLast $ Last (Just "one") <> Last (Just "two") -- Just "two"
+
