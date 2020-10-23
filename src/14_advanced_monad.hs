@@ -212,3 +212,215 @@ twoDrinks = ("dogmeat", Sum 5) `applyLog'` addDrink `applyLog'` addDrink -- ("be
     犬の肉に飲み物を注文すると、ビールが来て 30 セント追加されるので、結果は ("beer", Sum 35) になる。
     それにもう一度 applyLog' を使って addDrink すると、もう一杯ビールが来て ("beer", Sum 65) になる。
 -}
+
+--- ¶ Writer 型
+{-
+    これで、「モノイドのおまけのついた値」がいかにもモナド値のように振る舞うことがわかった。
+    では、そのような値の Monad インスタンスを見ていこう。
+    Control.Monad.Writer モジュールが、writer w a 型とその Monad インスタンス、それに Writer w a 型を扱うための便利な関数をエクスポートしている。
+
+    値にモノイドのおまけをつけるには、タプルに入れるだけである。
+    Writer w a 型の実態は、そんなタプルの newtype ラッパーに過ぎず、定義はとてもシンプル。
+
+        newtype Writer w a = Writer ( runWriter :: (a, w)) 💡型変数の順番が左辺と右辺で逆順になってることに注意。12 章の「¶ newtype を使って型クラスのインスタンスを作る」参照。
+
+    newtype に包むことで、Monad のインスタンスにするときに既存のタプルには影響を与えないようになっている。
+    型引数 a が主となる値の型を表し、型引数 w がおまけのモノイド値の型を表している。
+
+    Writer コンストラクタと同じことをする writer 関数も公開されており、これを使えばタプルを writer 値に変えられる。
+
+    Writer 値コンストラクタ自体はエクスポートされていないので、それとパターンマッチして中身を取り出すこともできない。
+    その代わり runWriter 関数を使う。
+    これが newtype ラッパーである WRiter 値を取って中身のタプルを返してくれる。
+
+    Monad インスタンスは、次のように定義されている。
+
+    instance (Monoid w) => Monad (writer w) where
+        return x = Writer (x, mempty) 💡ここの mempty は、実際に使われる時は型指定によって決まる。String の mempty なら "" だし Sum Int なら 0 だし、とか。
+        (Writer (x, v)) >>= f = let (Writer (y, v')) = f x in Writer (y, v <> v')
+
+    まずは >>= から見ていこう。
+    この実装は applyLog と基本は同じ、ただしタプルが Writer による newtype ラッパーの中にいる点だけが違っており、
+    パターンマッチを使って中身を取り出している（`Writer (x, v)` と書くことで x と v を取り出す）。
+    出てきた値 x に関数 f を適用している。これで Writer w a 型の値が得られるから、さらに let 式でパターンマッチする（`let (Writer (y, v')) = f x` の部分で y と v' を取り出す）。
+    そして y を新しい計算結果とする一方、mappend（<>） を使って 2 つのモノイド値を結合する。
+    結合して得られた計算結果とモノイドをタプルに入れ、続いて Writer コンストラクタで包むことで、返り値を Writer 型にしている。
+    生のタプルを返すわけにはいかないから。
+
+    では return のほうはどうだろう？　return は、値をt追って、それを再現できるような最小限のデフォルト文脈に入れる必要がある。
+    Writer 値にとってそのような最小限の文脈、つまりおまけのモノイド値とはなんだろう？
+    他のモノイド値になるべく影響を与えないモノイド値を選ぶとしたら、単位元であるところの mempty を選ぶのがよいだろう。
+
+    mempty はモノイドの単位元を表現するのに使われるんだった。例えば "" とか Sum 0 とか、空の ByteString とか。
+    mempty と、何か他のモノイド値を mappend した結果は、常にその「他のモノイド値」である。
+    そこで、return を使って Writer 値を作り、それを >>= を使って他の関数に食わせたら、結果のモノイド値は、関数が返したものがそのまま入っているはず。
+
+    3 という数に対して、組み合わせるモノイド値を変えながら return を使ってみよう。
+-}
+
+three :: (Int, String)
+three = runWriter (return 3) -- (3, "")
+
+-- これはつまり、以下と同じ。
+writerFoo :: Writer String Int -- ここの型引数の順番は three と逆になることに注意（Int と String の順番）
+writerFoo = return 3 -- WriterT (Identity (3,""))
+
+threeFoo :: (Int, String)
+threeFoo = runWriter writerFoo -- (3,"")
+-----
+
+three' :: (Int, (Sum Int))
+three' = runWriter (return 3) -- (3,Sum {getSum = 0})
+
+three'' :: (Int, (Product Int))
+three'' = runWriter (return 3) -- (3,Product {getProduct = 1})
+
+{-
+    Writer には Show インスタンスがないので、runWriter を使って、Writer 値を show が使えるタプルに変換している。
+    String の単位元は空文字列になっている。
+    Sum に対する単位元は 0 である。0 は何と足しても相手を返す。Product を使ったら、単位元は 1 になる。
+    Writer インスタンスは fail の実装を与えていないので、do 記法の中でパターンマッチに失敗すると error が呼ばれる。
+-}
+
+--- ¶　Writer を do 記法で使う
+{-
+    こうして Monad インスタンスができたので、Writer を do 記法で自由に扱える。
+    do 記法は複数の Writer をまとめて何かしたいときに便利。
+    他のモナドの場合と同じく、プログラマにとっては普通の値のように扱える裏で、モナドが文脈の面倒を見てくれる。
+    今回の場合は、すべてのモノイド値が mappend (<>) され、最終結果に反映される。
+
+    Writer を do 記法で使い、2 つの数を掛け算する例:
+-}
+
+-- import Control.Monad.Writer
+logNumber :: Int -> Writer [String] Int
+logNumber x = writer (x, ["Got Number: " ++ show x]) -- ここでは writer 関数を使っている
+
+multWithLog :: Writer [String] Int
+multWithLog = do
+    a <- logNumber 3
+    b <- logNumber 5
+    return (a * b)
+
+    -- > runWriter multWithLog
+    -- (15,["Got Number: 3","Got Number: 5"])
+
+{-
+    logNumber は、数を取って Writer 値を作り出す。Writer 値コンストラクタを使わずに、**writer 関数** 使って Writer 値を作っているところがポイント。
+    モノイド値としては文字列のリストを使うことにし、入ってきた数に対して「その数が通ったよ」という記録を単一要素リストとして残す。
+    multWithLog は、全体は 1 つの Writer 値で、中では 3 と 5 を掛け算しつつ、ログをもれなく残す。
+    return を使って、a * b を最終結果として返している。
+    return は、引数を最小の文脈に入れるものだったから、きっとログには何も追加しないだろうと、自信を持って言える。
+
+    時には、ある時点でモノイド値（ここでは文字列のリスト）だけを追記したいことがあるかもしれない。
+    そんなとき便利なのが tell である。tell は MonadWriter 型クラスの一部。
+    Writer の場合は、モノイド値、例えば ["This is going on"] を取り、ダミー値 () を返しつつ、そのモノイド値を追記するという Writer を返す。
+    返り値を変数に束縛する必要はない。
+    multWithLog の特別な報告が追加されたバージョンは以下のようになる:
+-}
+
+multWithLog' :: Writer [String] Int
+multWithLog' = do
+    a <- logNumber 3
+    b <- logNumber 5
+    tell ["Gonna multiply these two"]
+    return (a * b)
+
+        -- > runWriter multWithLog'
+        -- (15,["Got Number: 3","Got Number: 5","Gonna multiply these two"])
+
+{-
+    return (a * b) が最後の行になっているのは重要。
+    do 式の最後のモナドの結果が do 式全体の結果になるというルールだからである。
+    仮に tell を最後の行においたら、do 式の結果は () になり、掛け算の結果は失われていただろう。
+    ただし、ログは変更を受けない。
+-}
+
+--- 🎓独自検証----------------------------------
+  --- Writer 値を作る時は、Writer 値コンストラクタではなく writer 関数を使用する。
+moge :: Writer [String] Int
+moge = writer (10, ["hoge"])
+-- moge = Writer 10 ["hoge"]
+-----------------------------------------------
+
+--- ¶　プログラムにログを追加しよう！
+{-
+ユークリッドの互除法は、2 つの数を取ってその最大公約数を求めるアルゴリズムだ。
+Haskell には、そのものずばり gcd 関数がすでにあるが、せっかくなのでログを残す機能のついたバージョンを自前で作ってみよう。
+まず、以下が普通のアルゴリズムである:
+-}
+
+gcd_ :: Int -> Int -> Int
+gcd_ a b
+    | b == 0 = a
+    | otherwise = gcd_ b (a `mod` b)
+
+{-
+    このアルゴリズムはとてもシンプルである。
+    まず、第二引数がゼロかどうかを判定する。もしゼロなら、第一引数を返す。
+    そうでないなら、第二引数と「第一引数を第二引数で割った余り」との最大公約数を返す。
+
+    例えば、8 と 3 の最大公約数を、このアルゴリズムのとおりに求めてみよう。
+    まず、3 は 0 でないので、3 と 2 (= 8 `mod` 3) の最大公約数を求めることになる。
+    2 は、これも 0 ではないので、今度は 2 と 1 (= 3 `mod` 2) である。
+    またしても 0 でないので、アルゴリズムは 1 と 0 (= 2 `mod` 1) に進み、ようやくのことで 0 になったので 1 を返す。
+-}
+
+gcdOf8and3 :: Int
+gcdOf8and3 = gcd_ 8 3 -- 1
+
+{-
+    さて、この結果に、ログの役割をはたすモノイド値、という文脈を付けたい。
+    さっきみたいに文字列のリストをログとして使おう。ということは、新しい gcd' 関数の型は次のようになるはず:
+-}
+
+gcd' :: Int -> Int -> Writer [String] Int
+
+{- あとはこの関数にログをつけるだけである。以下が完成したコードだ: -}
+gcd' a b
+    | b == 0 = do
+        tell ["Finished with " ++ show a]
+        return a
+    | otherwise = do
+        tell [show a ++ " mod " ++ show b ++ " = " ++ show (a `mod` b)]
+        gcd' b (a `mod` b)
+
+{-
+    この関数は、普通の Int 値を 2 つ取って、Writer [String] Int、すなわちログ取りという文脈のついた Int を返す。
+    この関数は b が 0 であるとき、単純に a を返す代わりに、do 式を使って Writer 値を結果として返す。
+    それには、まず tell を使って終了したことを伝え、次に return を使って a を do 式の結果としている。
+    この do 式の代わりに、
+        writer (a, ["Finished with " ++ show a])
+    と書くこともできる。do 式を使うかどうかは好みだろう。
+
+    次に、b が 0 でない場合がくる。
+    この場合、mod を使って a を b で割った余りを求めたことを記録しておくことにする。
+    それから do 式の 2 行目で gcd' を再帰的に呼び出す。
+    ここで、gcd' は最後には Writer 値を返すことを思い出すと、gcd' b (a `mod` b) を do 式の結果行に置いておくのは正しいことだとわかる。
+
+    この新しい gcd' を試してみよう。
+    その返り値は Writer [String] Int であり、newtype から中身を取り出せばタプルとして読めるはずで、タプルの第一要素は計算結果のはず。
+-}
+
+gcdOf8and3' :: Int
+gcdOf8and3' = fst $ runWriter $ gcd' 8 3 -- 1
+
+-- OK! ではログのほうはどうだろう？　ログは文字列のリストだから、
+-- mapM_ putStrLn でも使って画面に表示させてみることにしよう。
+
+logging :: IO ()
+logging = mapM_ putStrLn $ snd $ runWriter (gcd' 8 3)
+    -- 8 mod 3 = 2
+    -- 3 mod 2 = 1
+    -- 2 mod 1 = 0
+    -- Finished with 1
+
+{-
+    こんなふうに、普通のアルゴリズムを実行中に何をしているか報告するアルゴリズムに変えられるのって、すごい！
+    しかも、普通の値をモナド値に変えるだけでそれができる。
+    ログを集める作業は Writer の >>= の実装が勝手にやってくれる。
+
+    このログ機能は、ほぼどんな関数にも追加できる。ただ、普通の値を Writer 値に、関数適用を >>= に変えればよいだけ。
+    （あるいは do のほうが可読性が上がるかもしれない）
+-}
+
