@@ -424,3 +424,185 @@ logging = mapM_ putStrLn $ snd $ runWriter (gcd' 8 3)
     （あるいは do のほうが可読性が上がるかもしれない）
 -}
 
+--- ¶　非効率なリスト構築
+{-
+    Writer モナドを使うときは、使うモナドに気をつけて。
+    リストを使うととても遅くなる場合があるからである。
+    リストは mappend（<>） に ++ を使っているが、++ を使ってリストの最後にものを追加する操作は、そのリストがとても長いと遅くなってしまう。
+    先ほど作った gcd' 関数のログ取りは速いほうだった。なぜなら、最終的に行われるリスト結合演算は以下のような感じになっていたからである:
+        a ++ (b ++ (c ++ (d ++ (e ++ f))))
+    リストは左から右へ構築されるデータ構造である。これが効率的なのは、まずリストの左辺を最後まで構築し、それから初めて右辺の長いリストを結合しているからである。
+
+    でも、うっかりすると Writer モナドを使った結果、以下のようなコードができかねない:
+        ((((a ++ b) ++ c) ++ d) ++ e) ++ f
+    さっきのが右結合だったのに対し、これは左結合である。このコードは、右辺を左辺に結合しようとするたびに左辺をはじめから構築しないといけないので非常に非効率！
+
+    今から示す関数は gcd' と似ているが、ログの出力が逆順になっている。
+    再帰の各ステップは、まずプログラムの残りの部分のログを全部出力してから今のステップをログの最後に追加するようになっている。
+-}
+
+-- import Control.Monad.Writer
+gcdReverse :: Int -> Int -> Writer [String] Int
+gcdReverse a b
+    | b == 0 = do
+        tell ["Finished with " ++ show a]
+        return a
+    | otherwise = do
+        result <- gcdReverse b (a `mod` b)
+        tell [show a ++ " mod " ++ show b ++ " = " ++ show (a `mod` b)]
+        return result
+
+{-
+    こいつは、まず再帰を呼び出してその結果を result という変数に束縛する。
+    それから今のステップをログに追加するので、現在のステップは再帰が生成したログの最後にくる。
+    最後に、再帰の結果を自身の計算結果として提示している。
+    これを動かすと次のようになる:
+-}
+
+logging' :: IO ()
+logging' = mapM_ putStrLn $ snd $ runWriter (gcdReverse 8 3)
+    -- Finished with 1
+    -- 2 mod 1 = 0
+    -- 3 mod 2 = 1
+    -- 8 mod 3 = 2
+
+{-
+    この関数は、++ を右結合ではなく左結合で使ってしまうので、非効率的である。
+    このようなやり方で結合していくとリストでは非効率になってしまう場合があるので、常に効率的な結合をサポートするデータ構造を使うのが一番だろう。
+    そのようなデータ構造の 1 つが差分リストである。
+-}
+
+--- ¶　差分リストを使う
+{-
+    通常のリストに似ている **差分リスト** だが、その実態はリストを取って別のリストを先頭に付け加える関数である。
+    例えば、[1,2,3] と等価な差分リストは \xs -> [1,2,3] ++ xs である。
+    通常の空リストは [] だが、空の差分リストは関数 \xs -> [] ++ xs として表される。
+
+    差分リストは効率の良いリスト結合をサポートする。普通のリストを 2 つ、++ で結合する時は、左辺のリストを最後まで延々と辿って行って、
+    そこに右辺をくっつけないといけない。しかし、差分リストというアプローチをとってリストを関数として表現すると、何が起こるだろう？
+
+    2 つの差分リストを結合する操作は、以下である。
+-}
+
+append :: (a -> b) -> (c -> a) -> c -> b
+f `append` g = \xs -> f (g xs)
+
+{-
+    f と g は、リストを取ってその前に何かをつける関数だった。
+    例えば、f が ("dog" ++)（別の書き方をすると \xs -> "dog" ++ xs）という関数で、
+    g が ("meat" ++) という関数なら、f `append` g は次の関数と等価になる。
+        \xs -> "dog" ++ ("meat" ++ xs)
+
+    2 つの差分リストを結合した結果は、引数にまず 2 つ目の差分リスト、続いて 1 つ目の差分リストを適用する関数になるようだ。
+    差分リストの newtype ラッパーを作ろう。そうすればモノイドインスタンスを作るのが楽になる。
+-}
+
+newtype DiffList a = DiffList { getDiffList :: [a] -> [a]}
+
+{-
+    包まれているものの型は [a] -> [a] （リストそのものではなく、リストを取ってリストを返す関数）である。
+    差分リストは、リストを取って同じ型のリストを返す関数に過ぎないからだ。
+    普通のリストを差分リストに変えたり、その逆をするのは簡単。
+-}
+
+toDiffList :: [a] -> DiffList a
+toDiffList xs = DiffList (xs ++)
+
+fromDiffList :: DiffList a -> [a]
+fromDiffList (DiffList f) = f []
+
+{-
+    普通のリストを差分リストにするには、さっきもやったような方法で、そのリストを引数リストの先頭に追加するような関数を作るだけである。
+    そして差分リストはリストの前に何かを結合する関数なので、その「何か」を取り出したかったら、その関数を空リストに適用するまでである！
+    以下が Monoid インスタンスである。
+-}
+
+instance Monoid (DiffList a) where
+    mempty = DiffList (\xs -> [] ++ xs)
+
+instance Semigroup (DiffList a) where
+    (DiffList f) <> (DiffList g) = DiffList (\xs -> f (g xs))
+
+{-
+    差分リストをリストからリストへの関数と見た場合、mempty は id 関数であり、mappend (<>) は関数合成になっていることがわかるだろうか。
+    これがうまく動くか試してみよう。
+-}
+
+lst :: [Int]
+lst = fromDiffList (toDiffList [1,2,3,4] <> toDiffList [1,2,3]) -- [1,2,3,4,1,2,3]
+
+{-
+    うまく動いている！
+    これで gcdReverse 関数の効率を上げられる。リストの代わりに差分リストを使うだけである。
+-}
+
+-- import Control.Monad.Writer
+
+gcdReverse' :: Int -> Int -> Writer (DiffList String) Int
+gcdReverse' a b
+    | b == 0 = do
+        tell (toDiffList ["Finished with " ++ show a])
+        return a
+    | otherwise = do
+        result <- gcdReverse' b (a `mod` b)
+        tell (toDiffList [show a ++ " mod " ++ show b ++ " = " ++ show (a `mod` b)])
+        return result
+
+{-
+    必要なことは、モノイド（つまり Writer のログ的な部分に入れるもの）の型を [String] から DiffList String に変えることと、tell を呼ぶには toDiffList で普通のリストを差分リストに変えることだけである。
+    ログがきちんと組み立てられているか、確かめてみよう。
+-}
+
+logging'' :: IO ()
+logging'' = mapM_ putStrLn . fromDiffList . snd . runWriter $ gcdReverse' 8 3
+    -- Finished with 1
+    -- 2 mod 1 = 0
+    -- 3 mod 2 = 1
+    -- 8 mod 3 = 2
+
+{-
+    まず gcdReverse' 8 3 をし、それから runWriter を使って newtype を剥がし、snd を使ってログだけを取り出し、
+    fromDiffList を使って通常のリストに変換し、最後にその要素を画像に表示させている。
+-}
+
+--- ¶　性能の比較
+{-
+    差分リストがどのくらい速度を上げてくれるのか体幹sうるために、こんな関数を考えよう。
+    その関数は、自然数の引数を取って、ひたすらゼロまでカウントダウンするが、gcdReverse のように逆向きのログを生成することで、
+    ログの中では数がカウントアップされるようにする。
+-}
+
+finalCountDown :: Int -> Writer (DiffList String) ()
+finalCountDown 0 = do
+    tell (toDiffList ["0"])
+finalCountDown x = do
+    finalCountDown (x-1)
+    tell (toDiffList [show x])
+
+{-
+    この関数に 0 を与えると、単にログを取る。
+    他の数では、まずその数マイナス 1 のカウントダウンを呼び出してから、その数をログに加える。
+    だから、finalCountDownを 100 に適用すると、文字列 "100" はログの最後に来るわけである。
+
+    この関数を GHCi に読み込ませて、巨大な数（500000 とか）に適用すると、素早く 0 から数えだすのが見られる。
+-}
+
+count :: IO ()
+count = mapM_ putStrLn . fromDiffList . snd . runWriter $ finalCountDown 500000
+        -- 0
+        -- 1
+        -- 2
+        -- ...
+
+-- しかし、差分リストの代わりに普通のリストを使ったらどうだろう？
+finalCountDown' :: Int -> Writer [String] ()
+finalCountDown' 0 = do
+    tell ["0"]
+finalCountDown' x = do
+    finalCountDown' (x-1)
+    tell [show x]
+
+count' :: IO ()
+count' = mapM_ putStrLn . fromDiffList . snd . runWriter $ finalCountDown 500000
+    -- 遅い！
+
