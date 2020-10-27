@@ -719,3 +719,448 @@ addStuff' x = let
     うまく動くことは >>= が保証してくれる。
 -}
 
+-------------------------------
+--　計算の状態の正体
+-------------------------------
+
+{-
+    Haskell は純粋な言語だから、Haskell のプログラムはグローバルな状態や変数を書き換えたりできない関数だけで構成されている。
+    関数は常に同じ計算をして値を返す運命なのである。
+    この制限は、実のところプログラムについて考えるのを楽にしてくれる。
+    なぜなら、特定の時刻でのすべての変数の値を考慮に入れる必要がなくなるわけだから。
+
+    ところが、「状態」が本質的な問題、時間とともに変わっていく何らかの状態に依存している計算というのは確かにある。
+    Haskell はそういった計算でも問題なく扱えるのだが、モデル化するのは少し骨が折れる。
+    そこで Haskell には State モナドが用意されている。
+    これさえあれば、状態付きの計算などいとも簡単。しかもすべてを純粋に保ったまま扱えるのである。
+
+    第 9 章で乱数を見たときには、乱数ジェネレータを引数に鳥、乱数と新しい乱数ジェネレータを返す関数を扱った。
+    複数の乱数が必要であれば、乱数と一緒に出てきた新しい乱数ジェネレータをつねに使うよう注意する必要があった。
+    例えば、ジェネレータ StdGen を引数に取り、それを使ってコインを 3 回投げる関数を作るには、以下のようにする:
+-}
+
+-- import System.Random
+threeCoins :: StdGen -> (Bool, Bool, Bool)
+threeCoins gen =
+    let (firstCoin, newGen) = random gen
+        (secondCoin, newGen') = random newGen
+        (thirdCoin, _) = random newGen'
+    in (firstCoin, secondCoin, thirdCoin)
+
+-- この関数にジェネレータ gen を渡すと、まず random gen が Bool 値と新たなジェネレータを返す。
+-- 2 枚目のコインを投げるには、この新しいジェネレータを使う。以下同様。
+
+coinToss :: (Bool, Bool, Bool)
+coinToss = threeCoins (mkStdGen 30) -- (True,False,False)
+
+{-
+    Haskell 以外のほとんどの言語では、乱数に添えて新しいジェネレータを返す必要などない。
+    だってジェネレータの状態を上書きすればいいじゃん！
+    でも Haskell は純粋な言語だから、そうはいかない。そこで、状態を受け取って、結果を作るとともに新しい状態も作り、
+    その新しい状態を使って次の結果を作る必要がある。
+
+    そんなふうに状態を手動で扱うのを避けるには Haskell の純粋性をあきらめる必要がある、と考えるかもしれない。
+    だが、その必要はないのである。なぜなら、`State` モナドという、Haskell プログラミングをこんなに素敵にしている純粋性を少しも損なうことなく
+    状態を扱うための面倒な作業を裏でやってくれるモナドがあるからである。
+-}
+
+--- ¶　状態付きの計算
+{-
+    状態付きの計算を実演するために、まずは型を与えてみよう。
+    状態付きの計算とは、ある状態を取って、更新された状態と一緒に計算結果を返す関数として表現できるだろう。
+    そんな関数の型は、次のようになるはずだ:
+        s -> (a, s)
+    s は状態の型で、a は状態付き計算の結果である。
+
+        > 🍜 Note
+        > Haskell 以外のほとんどの言語における「代入」操作は、状態付きの計算と捉えることができる。
+        > 例えば、手続型言語で x = 5 と書くと、普通は変数 x に 5 が入り、ついでに式の値も 5 になる。
+        > この挙動をよく観察すると、（これまでに代入されたすべての変数という）状態を取って、新しい状態と、(5) という結果を関数に見えてこないだろうか？
+        > この場合の新しい状態というのは、代入前の変数のマッピングから新たに代入された部分だけが変わっている状態である。
+
+    このような状態付きの計算（状態を取って、計算結果と新しい状態を返す関数）もまた、文脈付きの値だとみなすことができる。
+    計算の結果が「生の値」であり、その計算結果をエルためには初期状態を与える必要があること、そして、
+    計算の結果を得るのと同時に新しい状態が得られるというのが「文脈」にあたる。
+-}
+
+--- ¶　スタックと石
+{-
+    スタックをモデル化したいとしよう。
+    stack とは、いくつかのデータを格納でき、次の 2 つの操作をサポートするデータ構造である。
+
+    - Push: スタックのてっぺんに要素を積む
+    - Pop: スタックのてっぺんの要素を取り除く
+
+    スタックを表現するのにはリストを使い、リストの先頭がスタックのてっぺんに対応することにする。
+    次のような 2 つのヘルパー関数を作ろう。
+
+    - pop: スタックを引数に取って、要素を 1 つ取り出し、その取り出された要素を返す関数。ついでにその要素を除いたあとの新しいスタックも返す。
+    - push: ある要素とスタックを引数に取り、その要素をスタックに積む関数。() を結果として返し、ついでに新しいスタックも返す。
+
+    以下がその関数である:
+-}
+
+type Stack = [Int]
+
+pop' :: Stack -> (Int, Stack)
+pop' (x:xs) = (x, xs)
+pop' [] = error "error" -- これがないとエラーになる。
+
+push' :: Int -> Stack -> ((), Stack)
+push' a xs = ((), a:xs)
+
+{-
+    push の返り値は () にした。push 操作の仕事はスタックを変更することで、特に重要な結果値というものはないからである。
+    push の第一引数だけを部分適用すると、状態付き計算が生まれる（s -> (a, s) という型シグネチャになる。s は状態の型（ここでは Stack）で a は状態付き計算の結果（ここでは ()））。
+    pop は、その型からして、すでに状態付き計算になっている（すでに s -> (a, s) という型シグネチャである）。
+
+    これらの関数を使って、スタックをシミュレートするちょっとしたコードを書いてみよう。
+    とりあえず、3 でも積んで、それから 2 つばかり値を取り出してみよう。
+-}
+
+stackManip :: Stack -> (Int, Stack)
+stackManip stack = let
+    ((), newStack1) = push' 3 stack
+    (_, newStack2) = pop' newStack1 -- _ は、スタックから pop された値（Int）
+    in pop' newStack2
+
+{-
+    この関数は、stack を取って、まず push 3 stack をする。その結果はタプルで、第一要素が ()、第二要素は新しいスタックである。
+    この新しいスタックの名前は newStack1 としよう。次に newStack1 から新しい値を取り出す。
+    その結果は _ という数（さっき積んだ 3 が入っているはず。後続の処理で使わないので _ に束縛）と、また新しいスタックである。
+    今度は newStack2 という名前にする。
+    さらに、newStack2 から数を取り出し、数 b とスタック newStack3 のタプルを手に入れる。
+    stackManip は、このタプルをそのまま返している。使ってみよう:
+-}
+
+manipedStack :: (Int, Stack)
+manipedStack = stackManip [5,8,2,1]
+    -- (5,[8,2,1])
+
+{-
+    結果は 5 で、新しいスタックは [8,2,1] になった。
+    stackManip 自身も状態付き計算になっていたことに気づいただろうか？（型を見ればわかる。 Stack -> (Int, Stack) で、s -> (a, s) というパターンになっている）
+    今やったのは、状態付き計算をいくつか取って糊付けするという操作だったわけである。
+    それってどこで聞いたことがあるような。。。
+
+    さっきの stackManip のコードは、少々長ったらしい。すべての状態付き計算に、手で状態を与え、いちいち回収して名前をつけて、
+    また次のやつに与えている。各関数にスタックを手動で与えるのではなくて、以下のようにかけたらすごいと思わないだろうか？
+        stackManip = do
+            push 3
+            a <- pop
+            pop
+    なんと、State モナドを使うとまさにこんなふうにかけちゃうのである。
+    State モナドがあれば、このような状態付き計算を、状態に手を触れる必要もなく扱えるのだ。
+-}
+
+--- ¶　State モナド
+{-
+    Control.Monad.State モジュールは、状態付き計算を包んだ newtype を提供している。
+    以下がその定義である。
+        newtype State s a = State { runState :: s -> (a, s) }
+
+    State s a は、s 型の状態を操り、a 型の結果を返す状態付き計算である。
+    （実態が s -> (a, s) だから、State モナドは確定的な値ではなく、（s -> (a, s) 型の）関数である）
+    Control.Monad.Writer と同じく、Control.Monad.State も値コンストラクタをエクスポートしていない。
+    状態付き計算を State の newtype に包みたい時は、state 関数を使おう。
+    state 関数は State コンストラクタとまったく同じ動作をする。
+
+    これで、状態付き計算とは何であって、それがどうして文脈付きの値とみなせるかがわかった。
+    では状態付き計算の Monad インスタンスを見ていこう。
+
+        instance Monad (State s) where
+            return x = State $ \s -> (x, s)
+            (State h) >>= f = State $ \s -> let (a, newState) = h s
+                                                (State g) = f a
+                                            in g newState
+
+    return は、値を取って常にその値を結果として返すような状態付き計算にしたいわけである。
+    それが、ラムダ式 \s -> (x, s) が出てくる理由である。
+    こいつは常に x を状態付き計算の結果として提示し、状態には一切手をつけていない。
+    return は値を最小限の文脈に入れるという約束だからである。
+    というわけで、return はある値を提示し、状態を不変に保つような状態付き計算になるわけである。
+
+    では、>= はどうだろう？　まず、状態付き計算を、>>= を使って関数に食わせた結果もまた状態付き計算にならないといけない、よね？（モナド計算の基本）
+    そこでまず State の newtype ラッパーを書く（`State $...`）。それからラムダである（` \s -> let (a, newState) = h s...`）。
+    このラムダ式が新しい状態付き計算になるのである。
+    では、ラムダ式の中には何を書けばいいだろう？　とにかく 1 つ目の状態付き計算から結果の値を取り出さないといけない。
+    我々は、まさに状態付き計算の中にいるから、現在の状態 s を状態付き計算 h に渡すことならできる。
+        （h は（State h という書き方だと State s a の部分適用っぽく見えるけど、そうではなく、h は s -> (a, s) という状態付き計算を表している。
+        　  実験：
+            newtype Hoge s a = Hoge { getHoge :: s -> (a, s) }
+            Hoge haha = Hoge \x -> (0, x)
+            とすると
+            > :t haha
+            haha :: Num a => s -> (a, s)
+            > haha "yeah"
+            (0,"yeah")
+        ） 
+    すると計算結果と新しい状態のペア (a, newState) が出てくる。
+
+    これまでのところ、>>= 演算子を実装するときは、必ずまず左辺のモナド値を使い、結果だけを取り出したあと、
+    それに右辺の関数 f を適用して、新しいモナド値を得るという手順を踏んだ。
+    Writer を作った時は、その手順にしたがって新しいモナド値を得た後、さらに 2 つのモノイド値を mappend する作業が必要だった。
+    （(Writer (x, v)) >>= f = let (Writer (y, v')) = f x in Writer (y, v <> v')）
+    今回は、まず f a して、新しい状態付き計算 g を取り出している。
+    こうして新しい「状態付き計算（g）」と新しい「状態」（newState）が揃ったら、あとは状態付き計算 g を newState に適用するだけ。
+    その結果は、最終結果と最終状態のタプルになる！
+
+    このように、>>= を使えば 2 つの状態付き計算を糊付けすることができる。
+    2 つ目の計算は、1 つ目の計算の結果を受け取る関数の中に隠れている（g のこと？）。
+
+    さて、pop と push はすでに状態付き計算だから、State ラッパーに包むのは簡単。
+-}
+
+-- import Control.Monad.State
+pop :: State Stack Int
+pop = state $ \(x:xs) -> (x, xs)
+
+push :: Int -> State Stack ()
+push a = state $ \xs -> ((), a:xs)
+
+{-
+    関数を State の newtype ラッパーで包むのに、State 値コンストラクタを直接使う代わりに state 関数を使っているのがポイント。
+    pop はそのまま状態付き計算だし、push は Int を取って状態付き計算を返す関数である。
+    これで、さっきの 3 を push してから 2 回 pop する例を、以下のように書ける。
+-}
+
+stackManip' :: State Stack Int
+stackManip' = do
+    push 3
+    _ <- pop
+    pop
+
+{-
+    みごと、1 つの push と 2 つの pop を糊付けして、1 つの状態付き計算が作れた。
+    こいつの newtype ラッパーを剥がせば、初期状態を与えると動きだす関数が出てくる。
+-}
+
+manipedStack' :: (Int, Stack)
+manipedStack' = runState stackManip' [5,8,2,1]
+    -- (5,[8,2,1])
+
+{-
+    もうちょっとややこしいことはできるだろうか？
+    例えば、スタックから 1 つの数を取り出し、それが 5 だったらそっと元に戻す、でも 5 でなかったら代わりに 3 と 8 を積む、とかどうだろう？
+    以下がそのコードである:
+-}
+
+stackStuff :: State Stack ()
+stackStuff = do
+    a <- pop
+    if a == 5
+        then push 5
+        else do
+            push 3
+            push 8
+
+{-
+    これは直感的に書けた。では初期スタックを与えて走らせてみよう。
+        > runState stackStuff [9,0,2,1,0]
+        ((),[8,3,0,2,1,0])
+
+    do 式はモナド値を作ること、そして State モナドに関しては do 式もまた状態付きの関数であることを思い出そう。
+    stackManip' と stackStuff はどちらも普通の状態付き計算だから、この 2 つをさらに糊付けして、もっと大きな状態付き計算が作れる。
+-}
+
+moreStack :: State Stack ()
+moreStack = do
+    a <- stackManip'
+    if a == 100
+        then stackStuff
+        else return ()
+
+{-
+    現在のスタックに stackManip' を使った結果が 100 なら、stackStuff を実行する。
+    それ以外の場合は何もしない。return () は、状態に変更を加えず何もしないモナドである。
+
+    > runState moreStack [1,3,4]
+    ((),[3,4])
+
+    > runState moreStack [100,3,4]
+    ((),[8,3,4])
+-}
+
+--- ¶　状態の取得（get）と設定（put）
+{-
+    Control.Monad.State モジュールは、2 つの便利な関数 get と put を備えた、MonadState という型クラスを提供している。
+    State モナドに対する get の実装は以下のとおり:
+
+        get = state $ \s -> (s, s)
+
+    現在の状態を取ってきて、それを結果として提示しているだけである。
+    put 関数は、状態型の引数を取り、「その状態を、現在の状態に上書きする状態付き関数」を返す。
+
+        put newState = state $ \s -> ((), newState)
+
+    というわけで、この put と get があれば、現在のスタックを見たり、現在のスタックを丸ごとすり替えたりできる。
+    以下のように:
+-}
+
+stackyStack :: State Stack ()
+stackyStack = do
+    stackNow <- get
+    if stackNow == [1,2,3]
+        then put [8,3,1]
+        else put [9,2,1]
+
+{-
+    > runState stackyStack [1,2,3]
+    ((),[8,3,1])
+    > runState stackyStack [1,2,4]
+    ((),[9,2,1])
+-}
+
+{-
+    また、get と put を使って pop や push を実装することもできる。
+    まず、pop は以下。
+-}
+
+pop'' :: State Stack Int
+pop'' = do
+    xl <- get
+    case xl of
+        (x:xs) -> do
+            put xs
+            return x
+        _ -> error "Pattern matching error."
+{- ※ ここは、テキストどおりにやろうとするとエラーが出る。
+```
+Haskell WikiのMigration Guideで紹介されていますが、GHCの8.6.x以降ではdo記法内でエラーが発生しうるパターンマッチを使用する場合は、
+case記法を使ってモナドからの値取得後にパターンマッチングを行うよう指示されています。
+```
+とのこと（https://qiita.com/kurunin52/items/c555f30b4ea7362d3cf1#do%E8%A8%98%E6%B3%95%E5%86%85%E3%81%A7%E3%81%AE%E3%83%91%E3%82%BF%E3%83%BC%E3%83%B3%E3%83%9E%E3%83%83%E3%83%81%E3%83%B3%E3%82%B0）。
+-}
+
+{-
+    get を使ってスタック全体を取り出し、それから先頭要素を取り除いた残りを put を使って新しい状態にしている。
+    それから return を使って x を結果として提示している。
+    > runState pop'' [3,2,1]
+    (3,[2,1])
+
+    で、以下は get と put を使った push の実装である。
+-}
+
+push'' :: Int -> State Stack ()
+push'' x = do
+    xs <- get
+    put (x:xs)
+
+    -- > runState (push'' 10) [1,2,3]
+    --  ((),[10,1,2,3])
+
+{-
+    get を使って現在のスタックの状態を取得し、それに x を積んだものを put を使って新しい状態として設定するだけ。
+    ここで、もし >>= の型が State 値専用だったらどうなるか考えてみよう。
+
+        (>>=) :: State s a -> (a -> State s b) -> State s b
+
+    状態の型 s は常に同じで、計算結果の型は a から b に変えられる。
+    結果の型が違う状態付き計算どうしは >>= で糊付けできるが、状態の型は同じでなければならない。
+    なぜだかわかるだろうか？　例えば Maybe モナドの >>= はこんな型だった。
+
+        (>>=) :: Maybe a -> (a -> Maybe b) -> Maybe b
+    
+    モナド自身の型、つまり Maybe が >>= の前後で変わらないのは当然である。
+    型の違う 2 つのモナド（Maybe モナドとリストモナドなど）を >>= するのは無意味だ。さて、State モナドに戻ると、モナドのインスタンスになっている型は State s だった。
+    だから s が違うということは、>>= を違う型のモナドの間で使おうとしていることになるのである。
+-}
+
+--- ¶　乱数と State モナド
+{-
+    この節の冒頭で、乱数を生成する処理ってきれいに書けないよねー、という話をした。
+    乱数関数はジェネレータを引数に取り、乱数と一緒に新しいジェネレータを返すようにできていて、次の乱数を作るときは必ずこの新しいジェネレータを使い、
+    古い方を使わないよう気を付ける必要があるのだった。
+    State モナドがあれば、こういう処理はぐっと楽になる。
+
+    System.Random モジュールの random 関数の型は次のとおり:
+        random :: (RandomGen g, Random a) => g -> (a, g)
+    random は、乱数ジェネレータを引数に取り、乱数と新しいジェネレータを返す関数である、と言っている。
+    どう見ても状態付き計算である。
+    state 関数を使って State の newtype に包めば、状態の扱いをモナドに任せられる。
+-}
+
+-- import System.Random
+-- import Control.Monad.State
+randomSt :: (RandomGen g, Random a) => State g a
+randomSt = state random
+
+{-
+    これでコインを 3 枚投げる操作は以下のように書けるようになった。
+-}
+
+threeCoins' :: State StdGen (Bool, Bool, Bool)
+threeCoins' = do
+    a <- randomSt -- randomSt は状態付き計算（単一の確定的な値ではなく、random 関数と同様、乱数ジェネレータを引数に取って乱数値と新しい状態（乱数ジェネレータ）を返すもの）。
+    b <- randomSt
+    c <- randomSt
+    return (a, b, c)
+
+    -- う〜〜ん。do 式の各行の挙動が理解不足。。
+    -- do 式の各行は次の行に何か渡すんだっけ？
+    {-
+    ん、、でも
+    stackManip' :: State Stack Int
+    stackManip' = do
+        push 3
+        _ <- pop
+        pop
+    と書けたことから、do 式では状態は次の行に引き継がれるっていうことだよね。
+    push 3 した後のスタックから pop して、その pop されたスタックからもう一度 pop するので。。
+    今回もそれと同じで、randomSt で新しく生成された乱数ジェネレータを次の randomSt が受け取って、また新しく生成されたジェネレータをさらに次の randomSt が受け取って、という流れになるんだろう。。
+    -}
+
+{-
+    threeCoins 関数は状態付き計算になった。threeCoins' は、まず受け取ったジェネレータを最初の randomSt に渡す。
+    すると randomSt が乱数と新しいジェネレータを返す。
+    この新しいジェネレータが次に渡って、...... と続く。
+    最後に return (a, b, c) を使って、最も新しいジェネレータを変えることなく、(a, b, c) を結果として提示する。
+    では使ってみよう。
+
+    > runState threeCoins' (mkStdGen 30)
+    ((True,False,False),935833018 2103410263)
+
+    これで、状態が必要な計算をするときの手間がぐっと減った！
+-}
+
+{-
+> 参考
+State を使わなかったときの threeCoins の実装（再掲）
+
+    -- import System.Random
+    threeCoins :: StdGen -> (Bool, Bool, Bool)
+    threeCoins gen =
+        let (firstCoin, newGen) = random gen
+            (secondCoin, newGen') = random newGen
+            (thirdCoin, _) = random newGen'
+        in (firstCoin, secondCoin, thirdCoin)
+-}
+
+---　🧐自己検証。。do 記法の挙動。ふつうの関数 vs Stateモナドを使ったとき
+myFunc :: String -> (Int, String)
+myFunc txt = (length txt, txt ++ "!")
+
+doTest :: String -> ((Int, String),(Int, String),(Int, String))
+doTest = do
+    a <- myFunc
+    b <- myFunc
+    c <- myFunc
+    return (a,b,c)
+
+hogeResult :: ((Int, String),(Int, String),(Int, String))
+hogeResult = doTest "hoge" -- ((4,"hoge!"),(4,"hoge!"),(4,"hoge!"))
+
+---
+
+myFuncSt :: State String Int
+myFuncSt = state $ \txt -> (length txt, txt ++ "!")
+
+doTestSt :: State String (Int, Int, Int)
+doTestSt = do
+    a <- myFuncSt
+    b <- myFuncSt
+    c <- myFuncSt
+    return (a, b, c)
+
+hogeResultSt :: ((Int,Int,Int), String)
+hogeResultSt = runState doTestSt "hoge" -- ((4,5,6),"hoge!!!")
