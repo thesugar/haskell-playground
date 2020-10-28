@@ -1164,3 +1164,88 @@ doTestSt = do
 
 hogeResultSt :: ((Int,Int,Int), String)
 hogeResultSt = runState doTestSt "hoge" -- ((4,5,6),"hoge!!!")
+
+-------------------------------
+--　Error を壁に
+-------------------------------
+
+{-
+    Maybe モナドは「失敗するかもしれない計算」という文脈を値に与えるものだった。
+    Maybe 値は Just something か Nothing のどちらかになれる。
+    これは確かに便利なのだが、Nothing を受け取ったときにわかるのは、どこかで何かが失敗したというだけである。
+    どんな失敗があったのか、という情報を詰め込む余地はない。
+
+    Either e a 型も失敗の文脈を与えるモナドである。
+    しかも、失敗に値を付加できるので、何が失敗したかを説明したり、そのほか説明にまつわる有用な情報を提供できる。
+    Either e a は、Right 値であれば正解や計算の成功を、Left 値であれば失敗を表す。
+    以下が例である。
+
+    > :t Right 4
+    Right 4 :: Num b => Either a b
+
+    > :t Left "out of cheese error"
+    Left "out of cheese error" :: Either [Char] b
+
+    Either e はおおむね Maybe の強化版だから、モナドになっているのはごく自然なことである。
+    Maybe と同じく、失敗する可能性という文脈が付加された値とみなせるが、今度はエラーがあった場合にも値をつけられるのである。
+
+    Either の Monad インスタンスは Maybe のものによく似ており、Control.Monad.Error モジュール（🚨）で宣言されている。
+
+    instance (Error e) => Monad (Either e) where　（🚨現在は、この Error e という制約はついていない）
+        return x = Right x
+        Right x >>= f = f x
+        Left err >>= f = Left err
+        fail msg = Left (strMsg msg)
+
+    return は、いつもどおり、引数をデフォルトの最小限の文脈に入れる関数である。
+    return は引数を Right コンストラクタに入れる。Right は、計算に成功して値があることを表すからである。
+    これは Maybe モナドの return とよく似ている。
+
+    >>= は 2 つの場合に分かれる。左辺が Left である場合と Right である場合だ。
+    左辺が Right だった場合はその中の値に f を適用する（f は普通の値を取ってモナド値を返す関数というイメージなので、f x の結果もモナド値（Either）になる）。
+    これは Maybe モナドの Just の処理とそっくり。
+    一方、左辺がすでにエラーだった場合は、Left 値であることと、失敗を表す中身とがそのまま保たれる。
+
+    Either e の Monad インスタンスには、もう 1 つ必要条件がある。
+    Left に入るほうの値の型（型引数 e にあたる型）は、Error 型クラスのインスタンスでなければならない。
+    Error 型クラスは、エラーメッセージのように振る舞える型のクラスである。
+    Error 型クラスにはエラーを文字列として受け取って、その型に変換する strMsg 関数が定義されている。（🚨）
+    Error 型クラスの自明なインスタンスは、むろん String である。　String の場合、strMsg 関数は受け取った文字列をそのまま返すだけである。
+        strMsg :: Error a => String -> a
+
+        > strMsg "boom!" :: String
+        "boom!"
+
+    もっとも、Either を使うにあたってエラーは普通 String で表すから、Error 型クラスについてそれほど心配はいらない。
+    do 記法でのパターンマッチが失敗したときは、その失敗を表すのに Left 値を使ってくれる。
+    Either を使ってみた例が以下:
+-}
+
+eith :: Either String Int
+eith = Left "boom" >>= \x -> return (x+1) -- Left "boom"
+
+eith' :: Either String a
+eith' = Left "boom" >>= \_ -> Left "no way!" -- Left "boom"
+
+eith'' :: Either String Int
+eith'' = Right (10 :: Int) >>= \_ -> Left "no way!" -- Left "no way!"
+
+{-
+    >>= を使って Left 値を関数に食わせると、関数は無視されて Left 値がそのまま返る。
+    Right 値を関数に食わせた場合は、関数が Right の中身に適用されるが、この最後の例の場合は中身がなんであれ関数が Left 値を返している。
+
+    では、Right 値を成功する関数に渡したら？
+-}
+
+eith''' :: Either String Int
+eith''' =  Right (3 :: Int) >>= \x -> return (x + 100)
+    -- Right 103
+
+{-
+    🚨🚨🚨
+    テキストと現時点では仕様が異なり、Control.Monad.Error モジュールは deprecated であるようだ。
+    strMsg 関数も Control.Monad.Error に属するものであり、現在は使われていないようである。
+    Error 型クラス自体使わない（のかな？）。
+    Either のモナドインスタンスも、「Control.Monad.Instances モジュールで、Error 型クラスの文脈をつけない形で宣言する」ように変更されている。
+-}
+
