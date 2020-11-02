@@ -1670,4 +1670,139 @@ sumOfSmallInt = foldM binSmalls 0 [2,8,3,1] -- Just 14
 sumOfSmallInt' :: Maybe Int
 sumOfSmallInt' = foldM binSmalls 0 [2,11,3,1] -- Nothing
 
+-------------------------------
+--　安全な逆ポーランド記法電卓を作ろう
+-------------------------------
+
+{-
+    第 10 章で逆ポーランド記法（RPN）の電卓を実装せよという問題を解いたときには、この電卓は文法的に正しい入力が与えられる限り正しく動くよ、という注意書きがあった。
+    ところが、何か少しでも間違うとプログラム全体が落ちてしまうのだった。
+    しかし、既存のコードをモナディックにする方法がわかった今、Maybe モナドを使って、ぜひとも RPN 電卓にエラー処理機能をつけよう。
+
+    さて、我々の RPN 電卓の実装は、"1 3 + 2 *" のような文字列を引数に取り、["1", "3", "+", "2", "*"] のような単語に分解していた。
+    それから、数をスタックに積んだりスタックの上から数を取って足し算やら割り算やらを行う 2 引数関数を使って、空のスタックから初めてリストの内容を畳み込んだのだった。
+
+    以下が関数の本体（10 章の再掲）である:
+-}
+
+
+solveRPN :: String -> Double
+solveRPN = head . foldl foldingFunction' [] . words
+    -- 数式を文字列のリストにしてから、専用の関数で畳み込む。それから、スタックにただ 1 つ数が残っていることを期待して、それを答えとして返すという実装になっていた。
+    -- 以下がそのとき使った畳み込み関数である。
+foldingFunction' :: [Double] -> String -> [Double]
+foldingFunction' (x:y:ys) "*" = (y * x):ys
+foldingFunction' (x:y:ys) "+" = (y + x):ys
+foldingFunction' (x:y:ys) "-" = (y - x):ys
+foldingFunction' xs numberString = read numberString:xs
+
+{-
+    この畳み込み関数のアキュムレータは Double 値のリストとして表現されたスタックである。
+    この畳み関数が RPN 式を走査していくときは、もし現在のアイテムが演算子なら 2 つのアイテムをスタックのてっぺんから取り出し、演算を施し、結果をスタックに戻す。
+    もし現在のアイテムが実数を表す文字列なら文字列を実際の数に変換し、古いスタックとほとんど同じだけどその数がてっぺんに積まれている新しいスタックを返す。
+
+    まず、畳み込み関数に優雅に失敗（graceful failure）する能力を与えよう。型は、以下のように変わるはず:
+-}
+
+-- foldingFunction :: [Double] -> String -> Maybe [Double]
+
+{-
+    つまり、新しいスタックを Just にくるんで返すか、失敗した場合は Nothing を返すわけである。
+
+    reads 関数は read 関数に似ているが、読み取りに成功したときは単一要素リストを返す。もし読み込みに失敗した場合は空リストを返す。
+    しかも、読み取れた値を返すばかりでなく、消費しきれなかった文字列も返す。
+    reads の使い方は、GHCi のターミナルに以下のように入力すればわかるはず。
+
+        > reads "1" :: [(Int, String)]
+        [(1,"")]
+        > reads "1s" :: [(Int, String)]
+        [(1,"s")]
+
+    今回は、入力文字列を全部読み込めなかった場合も失敗とみなすことにしよう。
+    そして、readMaybe という便利な関数を作ろう。以下のとおりである:
+-}
+
+readMaybe :: Read a => String -> Maybe a
+readMaybe st = case reads st of [(x, "")] -> Just x
+                                _ -> Nothing -- reads が読み込みに失敗して空リストを返したときや、消費しきれなかった文字列があって [(1, "s")] のようなものを返したときなどがマッチする
+
+-- 試してみよう。
+foo :: Maybe Int
+foo = readMaybe "1" -- Just 1
+
+foo' :: Maybe Int
+foo' = readMaybe "I AM HAPPY" -- Nothing
+
+{-
+    OK, 動いているようだ。では、畳み込み関数のほうも失敗する可能性のあるモナディック関数にしてみよう。
+-}
+
+foldingFunction :: [Double] -> String -> Maybe [Double]
+foldingFunction (x:y:ys) "*" = return ((y * x):ys) -- (y * x):ys を括弧で括ることを忘れないこと。
+foldingFunction (x:y:ys) "+" = return ((y + x):ys)
+foldingFunction (x:y:ys) "-" = return ((y - x):ys)
+foldingFunction xs numberString = liftM (:xs) (readMaybe numberString)
+
+{-
+    最初の 3 つのパターンはおおむね昔のものと同じで、ただし新しいスタックは Just に包んで返している（ここでは return を使って包んでいるが、Just と書いてもよい）。
+    最後のパターンでは、readMaybe numberString を使ったあと、(:xs) で写している（liftM は fmap と同じような関数だった）。
+    例えば、スタック xs が [1.0, 2.0] で、readMaybe numberString の結果が Just 3.0 だったら、結果は Just [3.0, 1.0, 2.0] になるわけである。
+    もし readMaybe numberString の結果が Nothing だったら、全体の結果も Nothing になる。
+    畳み込み関数を単体で試してみよう。
+-}
+
+folded1 :: Maybe [Double]
+folded1 = foldingFunction [3,2] "*" -- Just [6.0]
+
+folded2 :: Maybe [Double]
+folded2 = foldingFunction [3,2] "-" -- Just [-1.0]
+
+folded3 :: Maybe [Double]
+folded3 = foldingFunction [] "*" -- Nothing
+
+folded4 :: Maybe [Double]
+folded4 = foldingFunction [] "1" -- Just [1.0]
+
+folded5 :: Maybe [Double]
+folded5 = foldingFunction [] "1 wawawawa" -- Nothing
+
+{-
+    どうやらちゃんと動いているようだ。これでいよいよ改良版 solveRPN が書ける。
+-}
+
+solveRPN' :: String -> Maybe Double
+solveRPN' st = do
+    [result] <- foldM foldingFunction [] (words st)
+    return result
+
+{-
+    まずは文字列を取って単語のリストに分けるところまでは以前のバージョンと同じ。次に、空のスタックから畳み込みを始めるが、
+    foldl の代わりに foldM を使っている。foldM した結果は Maybe 値で、その中身にはスタックの最終状態がリストとして入っている。
+    そしてそのリストは単一要素のはず。
+    （たとえば、foldM foldingFunction [] (words "1 3 + 2 *") の結果は Just [8.0]）
+    ここで、do 記法の中でその中身を取り出し、result という名前をつけている。
+    もし foldM が NOthing を返していたら、全体が Nothing になってくれるはず。それが Maybe モナドの機能だから。
+
+    また、do 記法の中でさりげなくパターンマッチを使っていることにも注目（[result] <- ...）。
+    リストにもし 2 つ以上の要素が入っていたり、あるいは空リストだったりしたら、パターンマッチが失敗して、やはり Nothing が発生するはず。
+    最後の行では、return result を使って、RPN 電卓の計算結果を Maybe 値として提示している。
+    実際に使ってみよう。
+-}
+
+rpn1 :: Maybe Double
+rpn1 = solveRPN' "1 2 * 4 +" -- Just 6.0
+
+rpn2 :: Maybe Double
+rpn2 = solveRPN' "1 2 * 4 + 5 *" -- Just 30.0
+
+rpn3 :: Maybe Double
+rpn3 = solveRPN' "1 2 * 4" -- Nothing
+
+rpn4 :: Maybe Double
+rpn4 = solveRPN' "1 8 whatsup" -- Nothing
+
+{-
+    3 例目が失敗しているのは、最終状態のスタックが単一要素でない（実際に計算すると Just [4.0,2.0]）ため、do 式の中のパターンマッチが失敗しているから。
+    4 例目の失敗は readMaybe が Nothing を返しているからである。
+-}
 
