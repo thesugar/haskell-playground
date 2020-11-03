@@ -1806,3 +1806,102 @@ rpn4 = solveRPN' "1 8 whatsup" -- Nothing
     4 例目の失敗は readMaybe が Nothing を返しているからである。
 -}
 
+-------------------------------
+--　モナディック関数の合成
+-------------------------------
+
+{-
+    第 13 章でモナド則を紹介したとき、 <=< 関数は関数合成によく似ているが、普通の関数 a -> b ではなくて、a -> m b のようなモナディック関数に作用するのだと言った。
+
+        〜再掲〜
+        (<=<) :: (Monad m) => (b -> m c) -> (a -> m b) -> (a -> m c)
+        f <=< g = (\x -> g x >= f)
+
+    例を挙げる。
+-}
+
+funcA :: Num a => a -> a
+funcA = (+1) . (*100)
+
+value :: Int
+value = funcA 4 -- 401
+
+funcB :: (Num a, Monad m) => a -> m a
+funcB = (\x -> return (x+1)) <=< (\x -> return (x*100))
+
+value' :: Maybe Int
+value' = Just 4 >>= funcB -- Just 401
+
+--- ちなみに、funcB の型シグネチャでは Maybe 型を指定しているわけではなく、単に Monad でしているから、
+--- 以下のように Either 型の値や他にもリストなどあらゆるモナドを funcB に食わせることができる。
+value'' :: Either String Int
+value'' = Right 4 >>= funcB
+
+{-
+    この例では、まず普通の関数を 2 つ合成し、できた関数を 4 に適用している（funcA）。
+    次に、モナディック関数（ラムダ式）を 2 つ合成（<=<）し、できた関数に >>= を使って Just 4 を食わせている。
+-}
+
+---------------
+
+{-
+    *複数の関数* をリストに入れて持っているとき、そのすべてを合成して 1 つの巨大な関数を作るには、id をアキュムレータ、
+    . を 2 引数関数として畳み込めばよいだろう。例えば以下のように:
+-}
+
+multiFunctions :: Num a => a -> a
+multiFunctions = foldr (.) id [(+8), (*100), (+1)]
+
+appliedTo1 :: Int
+appliedTo1 = multiFunctions 1 -- 208
+    -- 関数 multiFunctions は、引数にまず 1 を足し、続いて 100 倍し、最後に 8 を足す関数である。
+
+{-
+    モナディック関数も同じように合成できるが、普通の関数合成の代わりに <=< を、id の代わりに return を使えばよい。
+    foldr を foldM とかに変えたりする必要はない。なんとなれば <=< が、関数合成がモナド風に行われることを保証してくれるのだから。
+
+    第 13 章で、最初にリストモナドを導入したときは、ナイトの駒がチェス盤上のある位置から別の位置までちょうど 3 手で移動できるかどうかを判定するのに使ったのだった。
+    あのときは、moveKnight という、ナイトの現在位置を取って可能な手のリストを返す関数を作った。
+    そして 3 手後にどこにいられるかを知るために、以下のような関数を作ったのだった。
+
+        in3 start = return start >>= moveKnight >>= moveKnight >>= moveKnight
+
+    それから、ナイトが start から end まで 3 手で行けるか試した。
+
+        canReachIn3 :: KnightPos -> KnightPos -> Bool
+        canReachIn3 start end = end `elem` in3 start
+
+    モナディック関数合成を使えば、in3 みたいな関数を書けるし、しかも 3 手後の位置とかでなく任意の手数に対応でいる。
+    in3 をよく見ると、moveKnight を 3 回使っているが、どれも直前のナイトの位置を >>= で受け取っているのがわかる。
+    では、もっと一般化してみよう。
+-}
+
+type KnightPos = (Int, Int)
+moveKnight :: KnightPos -> [KnightPos] -- 13 章からのコピペ
+moveKnight (c, r) = do
+    (c', r') <- [(c+2, r-1), (c+2, r+1), (c-2, r-1), (c-2, r+1), (c+1, r-2), (c+1, r+2), (c-1, r-2), (c-1, r+2)]
+    guard (c' `elem` [1..8] && r' `elem` [1..8])
+    return (c', r')
+
+inMany :: Int -> KnightPos -> [KnightPos]
+inMany x start = return start >>= foldr (<=<) return (replicate x moveKnight)
+
+{-
+    まず、replicate を使って関数 moveKnight のコピーが x 個入ったリストを作る。
+    続いて、そのすべてをモナディックに合成して 1 つにすれば、初期位置を取ってナイトを非決定的（=リストモナド）に x 手動かす関数が出来上がる。
+    それから初期位置の入った単一要素リストを return で作って（return start）、さっきの関数に渡せば（>>=）完成。
+
+    となると、canReachIn3 も一般化できる。
+-}
+
+canReachIn :: Int -> KnightPos -> KnightPos -> Bool
+canReachIn x start end = end `elem` inMany x start
+
+{-
+    〜使用例〜
+    Main> canReachIn 5 (2,4) (5,6)
+    True
+    Main> canReachIn 2 (2,4) (5,8)
+    False
+-}
+
