@@ -198,3 +198,175 @@ x -: f = f x
 restTree' :: (Tree Char, Breadcrumbs')
 restTree' = (freeTree, []) -: goRight' -: goLeft' -- (Node 'W' (Node 'C' Empty Empty) (Node 'R' Empty Empty),[L,R])
 
+--- ¶ 来た道を戻る
+{-
+    木を逆方向に辿り直すにはどうすればよいのだろう？
+    [L,R] というパンくずリストからは、今の木が親の木の左部分木だったこと、そしてその親は、親の親の木の右部分木だったことはわかる
+    （パンくずリストは L:R:[] だから、R に行って → L に行った、という順番になることに注意）。が、それがすべてである。
+    パンくずリストだけでは、木構造を上向きに辿るための十分な情報がない。
+    一つ一つのパンくずの中に、木を辿った方向だけでなく、木構造を戻るために必要なデータをすべて備えておく必要があるようだ。
+    今回の場合、それは親の木のルート要素および右部分木（← 今回の restTree の例では）である。
+
+    一般的に言って、1 つのパンくずには親ノードを構築するのに必要なすべてのデータを蓄えておく必要がある。
+    つまり、辿った方向だけじゃなく、辿る可能性があった経路の情報も必要である。
+    ところが、今注目している部分木の情報まで含んで胃はいけない。なぜなら注目している部分木の情報はタプルの第一要素に既出だからである。
+    これまでもがパンくずに含まれていると情報が重複してしまう。
+
+    情報が重複するのは避けたい。なぜなら、注目している部分木になんらかの変更が加わった場合、パンくずリストの中にある情報との間で一貫性が壊れてしまうからである。
+    注目点の中で少しでも変更があると、重複している情報は期限切れで無効になる。しかも、もし木の要素数が多かったらメモリもバカ食いしてしまう。
+    （🧵🦕ここらへんの議論、状態をすべて値として持つ（他言語のように参照で管理しない）Haskell らしさを強烈に感じるところだ。。）
+
+    では、パンくずリストを改良し、これまで左右に移動するときに無視してきた情報をすべて含むようにしよう。
+    Directions に変わる新しいデータ型を作る。
+-}
+
+data Crumb a = LeftCrumb a (Tree a) | RightCrumb a (Tree a) deriving (Show)
+
+{-
+    今度は、ただの L に代わって LeftCrumb というコンストラクタがあり、移動元のノードに含まれていた要素と、辿らなかった右部分木をも持つようになっている。
+    また R に代わって RightCrumb があり、やはり移動元のノードに含まれていた要素と、辿らなかった左部分木を持っている。
+
+    この新しいパンくずリストなら、辿ってきた木を再構築できるだけの情報をすべて含んでいる。
+    もはやただのパンくずリストというより、分岐点に行き当たるたびに残してきたフロッピーディスクのようなものである。
+    辿った方向よりもずっと多くの情報を含んでいるわけだから。
+
+    新しいパンくずは、本質的には「穴」のついた木のノードのようなものである（ここでいう穴とは、情報が落ちている（欠落させている（わざと））部分ということ）。
+    木を 1 階層辿るごとに、パンくずには出発点のノードの情報のうち「いま注目することを選んだ部分 **を除く** （＝移動元のノードに含まれていた情報と、辿らなかった右or左部分木の情報）すべての情報」が書き込まれる。
+    あと、穴がどこにあったのかも記録する必要がある。LeftCrumb の場合では、左に移動したことは知っているので、穴は左部分木のところに空いているのである。
+
+    型シノニム Breadcrumbs にもこの更新を反映させよう。
+-}
+
+type Breadcrumbs a = [Crumb a]
+
+{-
+    続いて、goLeft 関数と goRight 関数も修正し、辿らなかった経路の情報を捨てるのではなくパンくずリストに記録するようにしないといけない。
+    まず、以下が goLeft である。
+-}
+
+goLeft :: (Tree a, Breadcrumbs a) -> (Tree a, Breadcrumbs a)
+goLeft (Node x l r, bs) = (l, (LeftCrumb x r):bs)
+goLeft (Empty, _) = error ""
+
+{-
+    この関数では、引数にきた木が Empty じゃないことを仮定している点に注意（といっても、Werror を設定していると、Pattern match are non-exhaustive エラーが出るので、いちおうエラーを出すようパターンマッチ書いてる）。
+    空の木には部分木がないから、空の木から左に行こうとしたらエラーが出る。
+
+    goRight も似たようなもの。
+-}
+
+goRight :: (Tree a, Breadcrumbs a) -> (Tree a, Breadcrumbs a)
+goRight (Node x l r, bs) = (r, (RightCrumb x l):bs)
+goRight (Empty, _) = error ""
+
+{-
+    さて、左や右に行くことなら、これまでも可能だった。今、さらに親ノードの情報と辿らなかった経路の情報を揃えたことで、
+    経路を戻る能力を手に入れたはずだ。以下が goUp 関数である:
+-}
+
+goUp :: (Tree a, Breadcrumbs a) -> (Tree a, Breadcrumbs a)
+goUp (t, (LeftCrumb x r):bs) = (Node x t r, bs)
+goUp (t, (RightCrumb x l):bs) = (Node x l t, bs)
+goUp (_, []) = error ""
+
+{-
+    木 t に注目している状態で、最新の Crumbs を調べる。それが leftCrumb であれば、（木 t にたどり着くためには親の木から左に進んだよ、という形跡としてのパンくずなので）現在の木である t を左部分木に使い、
+    Node の残りの部分は、パンくずからの右部分木とルート要素の情報を使って埋める。
+    そして、「履歴を戻る」操作をするためにリストの先頭のパンくずを拾ってしまったわけだから、新しいパンくずリストからは先頭要素を除いておく。
+
+    木のてっぺんにいる場合に、さらに上に戻ろうとしてこの関数を使うと、やはりエラーになる（goUp (_, []) の部分）。
+    あとで Maybe モナドを使って、注目点を移動しようとしたときに起こりうる失敗を表現できるようにする。
+
+    Tree a と Breadcrumbs a のペアは、元の木全体を復元するのに必要な情報に加えて、ある部分木に注目した状態というのを表現している。
+    このスキームなら、木の中を上、左、右へと自由自在に移動できる。
+
+    あるデータ構造の注目点、および周辺情報を含んでいるデータ構造は Zipper と呼ばれる。
+    注目点をデータ構造に沿って上下させる操作は、ズボンのジッパーを上下させる操作に似ているからである。というわけで、以下のような型シノニムを定義しておく。
+-}
+
+type Zipper a = (Tree a, Breadcrumbs a)
+
+{-
+    Zipper じゃなくて Focus という名前にしてもいい。データ構造の一部分に注目しているということをよく表す名前になるから。
+    だが、このような設計を表す名前としては　Zipper のほうが広く普及しているので、ここは大勢に従っておこう。
+-}
+
+--- ¶　注目している木を操る
+
+{-
+    さて、これで上下に動ける（上：goUp, 下:（左）goLeft, （右）goRight）ようになったから、ジッパーが注目している部分木のルート要素を書き換える関数を作ろう。
+-}
+
+modify :: (a -> a) -> Zipper a -> Zipper a
+modify f (Node x l r, bs) = (Node (f x) l r, bs)
+modify _ (Empty, bs) = (Empty, bs)
+
+{-
+    注目点がノードである場合、関数 f を使ってそのノードのルート要素を書き換える。もし注目点が空の木なら、そっとしておく。
+    これでどんな木でも、好きなところへ辿っていき、要素を修正しつつも常に注目点を忘れず、いつでもまた上下に移動できるように保てる。
+    例えば、「まず左へ行き、次に右へ行き、ルート要素を 'P' で置き換えるという修正を施す」という操作なら、以下のように書けるわけである。
+-}
+
+newFocus :: Zipper Char
+newFocus = modify (\_ -> 'P') $ (freeTree, []) -: goLeft -: goRight
+    -- (Node 'P' (Node 'S' Empty Empty) (Node 'A' Empty Empty),[RightCrumb 'O' (Node 'L' (Node 'N' Empty Empty) (Node 'T' Empty Empty)),LeftCrumb 'P' (Node 'L' (Node 'W' (Node 'C' Empty Empty) (Node 'R' Empty Empty)) (Node 'A' (Node 'A' Empty Empty) (Node 'C' Empty Empty)))])
+    -- newFocus = (freeTree, []) -: goLeft -: goRight -: modify (\_ -> 'P') と書いてもいい。
+
+{-
+    望みとあらば、さらに 1 つ上へ行き、そこの要素を謎めいた 'X' に置き換えることもできる。
+-}
+
+newFocus2 :: Zipper Char
+newFocus2 = modify (\_ -> 'X') (goUp newFocus)
+    -- (Node 'X' (Node 'L' (Node 'N' Empty Empty) (Node 'T' Empty Empty)) (Node 'P' (Node 'S' Empty Empty) (Node 'A' Empty Empty)),[LeftCrumb 'P' (Node 'L' (Node 'W' (Node 'C' Empty Empty) (Node 'R' Empty Empty)) (Node 'A' (Node 'A' Empty Empty) (Node 'C' Empty Empty)))])
+
+{-
+    上への移動がここまで簡単になったのは、残してきたパンくずリストがデータ構造のうちの現在注目していない点を構成しており、しかも「逆向きに」、いわば裏返した靴下のようになっているからである。
+    だからこそ上に移動するときにも、表向き煮直し、現在の注目点に継ぎ足せばいいのである。
+    どのノードも 2 つの部分木を持つが、それは空かもしれない。だから、空の部分木に注目している場合、注目点を空でない部分木で置換すれば木を別の木の末端に継ぎ足す操作が作れる。
+    そのためのコードもシンプル。
+-}
+
+attach :: Tree a -> Zipper a -> Zipper a
+attach t (_, bs) = (t, bs)
+
+{-
+    木とジッパーを取って、注目点を与えられた木で置き換えた新しいジッパーを返している。
+    これは、空の木を置換して木を伸ばすことだけでなく、既存の部分木を置き換えるのにも使える。
+    それでは、おなじみの freeTre の一番左に新しい木を取り付けてみよう。
+-}
+
+farLeft :: Zipper Char
+farLeft = (freeTree, []) -: goLeft -: goLeft -: goLeft -: goLeft
+    -- (Empty,[LeftCrumb 'N' Empty,LeftCrumb 'L' (Node 'T' Empty Empty),LeftCrumb 'O' (Node 'Y' (Node 'S' Empty Empty) (Node 'A' Empty Empty)),LeftCrumb 'P' (Node 'L' (Node 'W' (Node 'C' Empty Empty) (Node 'R' Empty Empty)) (Node 'A' (Node 'A' Empty Empty) (Node 'C' Empty Empty)))])
+
+newFocus' :: Zipper Char
+newFocus' = farLeft -: attach (Node 'Z' Empty Empty)
+    -- (Node 'Z' Empty Empty,[LeftCrumb 'N' Empty,LeftCrumb 'L' (Node 'T' Empty Empty),LeftCrumb 'O' (Node 'Y' (Node 'S' Empty Empty) (Node 'A' Empty Empty)),LeftCrumb 'P' (Node 'L' (Node 'W' (Node 'C' Empty Empty) (Node 'R' Empty Empty)) (Node 'A' (Node 'A' Empty Empty) (Node 'C' Empty Empty)))])
+{-
+    これで、newFocus は取り付けたばかりの新しい木に注目していて、木の残りの部分は裏返しでパンくずリストに入っている状態が作れた。
+    ここから goUp で木のてっぺんまで戻ると、freeTree に対して左端に 'Z' が増えている木が作れるはずだ。
+-}
+
+--- ¶　まっすぐ、てっぺんまで行って、新鮮でおいしい空気を吸おう！
+{-
+    今どこに注目しているかによらず、木のてっぺんまで移動する簡単はすごく簡単に作れる。以下である。
+-}
+
+topMost :: Zipper a -> Zipper a
+topMost (t, []) = (t, [])
+topMost z = topMost (goUp z)
+
+{-
+    パンくずリストが空なら、すでにルートにいるということだから、現状の注目点をそのまま返せばよい。
+    そうでなければ、goUp で親ノードに注目したうえで、再帰的に topMost を使う。
+
+    これで、木の中を歩き回り、左に右に、また上に行ったり、道すがら modify や attach を適用してまわったりできるようになった。
+    そうして修正が済んだら、topMost を使ってルートまで上がり、これまで加えてきた変更を一望しよう。
+-}
+
+topView :: Zipper Char
+topView = newFocus' -: topMost
+ -- (Node 'P' (Node 'O' (Node 'L' (Node 'N' (Node 'Z' Empty Empty) Empty) (Node 'T' Empty Empty)) (Node 'Y' (Node 'S' Empty Empty) (Node 'A' Empty Empty))) (Node 'L' (Node 'W' (Node 'C' Empty Empty) (Node 'R' Empty Empty)) (Node 'A' (Node 'A' Empty Empty) (Node 'C' Empty Empty))),[])
+ -- 左端に 'Z' が追加されていることがわかる。
+
