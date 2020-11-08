@@ -453,3 +453,301 @@ fooXs''' = goBack fooXs'' -- ([3,4],[2,1])
     そうしてジッパーを使えば、カーソルのある行を表現することができ、テキストの任意の箇所に新しい行を挿入したり削除したりする操作も簡単に書ける。
 -}
 
+-------------------------------
+--　超シンプルなファイルシステム
+-------------------------------
+
+{-
+ジッパーを使ったデモとして、ごく単純化したファイルシステムを木で表現してみよう。
+そのファイルシステムに対するジッパーを作り、本物のファイルシステムのようにフォルダ間を移動できるようにしよう。
+
+よくある階層的なファイルシステムはファイルとフォルダからなる。
+ファイルは名前のついたデータの塊で、フォルダはそれらファイルを整理するためのもので、複数のファイルやフォルダを含むことができる。
+今回の単純な例では、ファイルシステム内のアイテムは次のいずれかであるとしよう。
+
+    - ファイル：名前がついていて、データが入っている
+    - フォルダ：名前がついていて、複数のファイルやフォルダをアイテムとして含む
+
+状況がよくわかるように、型シノニムとデータ型を作ろう。
+-}
+
+type Name = String
+type Data = String
+data FSItem = File Name Data | Folder Name [FSItem] deriving (Show)
+
+{-
+    ファイルは 2 つの文字列からなる。1 つ目はファイル名で、2 つ目が中身のデータを表している。
+    フォルダは、フォルダ名を表す文字列と、中身のアイテムのリストからなる。中身リストが空だったら、それは空フォルダということになる。
+    （データ型の定義が再帰的になっていることに注目、、といっても List の定義も Tree の定義も右辺に自身（それぞれ List, Tree）を含んでいたし珍しいことではない。
+    　→再帰的なデータ構造に関しては 7 章参照）
+
+    いくつかのフォルダやサブフォルダが入っているフォルダを以下に例示する。
+-}
+
+myDisk :: FSItem
+myDisk = Folder "root"
+            [ File "KOHH.mp3" "After all, my local!!"
+            , File "TheSmiths.mp3" "Queen is Dead"
+            , Folder "pics" [
+                File "Copenhagen.jpg" "the town with water"
+                , File "Stockholm.jpg" "a old street named Gamura-Stan"
+                , File "Oslo.png" "love your coffee"
+                ]
+            , File "secret.doc" "xxxxxxxxxx"
+            , Folder "programs"
+                [
+                File "model.py" "def main(): df_train, df_test = load.data() if __name__ == '__main__': main()"
+                , File "index.js" "console.log('hoge')"
+                , File "not_a_virus.exe" "really not a virus"
+                , Folder "haskell"
+                    [File "best_hs_prog.hs" "main = print (fix error)"
+                    , File "random.hs" "main = print 4"
+                    ]
+                ]
+            ]
+
+--- ¶　このファイルシステムのジッパーを作ろう！
+{-
+    これでファイルシステムはできたので、あとはジッパーさえあれば、ザッピングもズームインも自由、ファイルの追加・編集・消去も自在にできる。
+    二分木やリストでもやったように、パンくずリストは、ここに行く！　と決めたもの以外のすべての情報を含む必要がある。
+    1 かけらのパンくずには、今注目している部分木以外のすべてを保存するべきである。
+    また、「穴」（欠落）の位置も覚えておかないと、上に戻ったときに直前の注目点を適切な位置に埋め戻すことができない。
+
+    今回の場合、パンくずはフォルダにそっくりなデータ構造になるはず（ただし、今選択されているフォルダは含まれない）。
+    「あれ、ではファイルは？」と思っただろうか？　ひとたびファイルに注目したら、ファイルシステムをそれ以上深く辿ることはできない。
+    だから、「ファイルからきました」というパンくずが残されることはないはずである。ファイルは、あたかも空の木（Empty）のような役割なのである（=末端にあるもの）。
+
+    例えば、"root" フォルダに注目している状態から "secret.doc" に注目している状態に移るときは、どんなパンくずを残せばいいだろうか？
+    まず親フォルダの名前と、注目しているアイテムの前後にくるべき他のアイテムたちである。
+    だから、Name がひとつと、アイテムのリストが 2 つ必要である。
+    現在のアイテムの前にあったアイテムのリストと、後ろにあったアイテムのリストを分けておくことで、戻るときに現在のアイテムをフォルダのどこに戻せばいいか、ちゃんとわかる。
+    そうやって穴の位置を記録するわけである。
+
+    以下が我々のファイルシステムのパンくずの型である。
+-}
+
+data FSCrumb = FSCrumb Name [FSItem] [FSItem] deriving (Show) -- パンくずの型
+
+-- そして、以下がジッパー。
+
+type FSZipper = (FSItem, [FSCrumb]) -- [FSCrumb] は パンくず*リスト* の型。二分木の例でも、左へ行った、右へ行った、という記録を残すために、ジッパーはパンくずのリストを持っていた。
+
+{-
+    階層構造を上に戻るのはとても簡単。最新のパンくずを取って、現在の注目点とそのパンくずとから、以下のように新しい注目点を作る。
+-}
+
+fsUp :: FSZipper -> FSZipper
+fsUp (item, (FSCrumb name ls rs):bs) = (Folder name (ls ++ [item] ++ rs), bs)
+fsUp (_, []) = error "cannot go up"
+
+{-
+    パンくずには、フォルダの名前、フォルダの中で注目点より前にあったアイテムのリスト（その名は ls）、注目点より後ろにあったアイテムのリスト（その名は rs）が入っているから、上に戻るのは簡単。
+
+    ではファイルシステムを奥に辿るのはどうだろう？
+    今 "root" にいるとして、ファイル "secret.doc" に注目したいときは、後に残すパンくずにはフォルダ名 "root" と、"secret.doc" よりも前にあったアイテム、後ろにあったアイテムのリストを残す必要がある。
+    以下が、アイテム名を引数に取って、現在のフォルダの中にあるファイルまたはフォルダに注目点を移す関数である。
+-}
+
+fsTo :: Name -> FSZipper -> FSZipper
+fsTo name (Folder folderName items, bs) =
+    let (ls, item:rs) = break (nameIs name) items
+    in (item, FSCrumb folderName ls rs:bs)
+fsTo _ (File _ _, _) = error "Error!"
+
+nameIs :: Name -> FSItem -> Bool
+nameIs name (Folder folderName _) = name == folderName
+nameIs name (File fileName _) = name == fileName
+
+{-
+    fsTo は、Name と FSZipper を引数に取り、その名前を持つアイテムに注目した新しい FSZipper を返す。
+    引数に与えられた名前を持つアイテムは、フォルダ内に存在しないといけない。
+    この関数は、ファイルシステム全体を検索してくれるわけではない。カレントフォルダ内だけを探す。
+
+    まず break を使って、いま探しているアイテムよりも前にあるものと後ろにあるものとにアイテムのリストを分ける。
+    break は、述語とリストを引数に取り、リストのペアを返す関数である。
+    ペアの第一要素はすべて、述語が False を返すような要素である。その後、述語が True を返すようなアイテムが 1 つでも見つかればそいつを含め、残りのアイテムは全部第二要素に入る。
+    ここでは述語として、「名前とファイルシステムアイテムを引数に取り、名前が一致していれば True を返す補助関数 nameIs」を作って使っている。
+
+    こうして、探していたアイテムより前にあるアイテム ls、探していたもの item、探していたものより後にいたもの rs が分類できた。
+    この 3 つが break から取れたなら、あとは見つかったアイテムを注目点として提示し、パンくずに全部のデータを積めれば完成！
+
+    探している名前を持つアイテムがフォルダにないときは、パターン item:rs が空リストに合致しようとしてエラーが出ることに注意。
+    また、また、現在の注目点がフォルダでなくファイルである場合も、同じくエラーが出てプログラムがクラッシュする。
+
+    これで、ファイルシステムの中を上下方向に移動できるようになった。
+    ルートから "Oslo.png" というファイルまで辿ってみよう。
+-}
+
+nextFocus :: FSZipper
+nextFocus = (myDisk, []) -: fsTo "pics" -: fsTo "Oslo.png"
+ -- (File "Oslo.png" "love your coffee",[FSCrumb "pics" [File "Copenhagen.jpg" "the town with water",File "Stockholm.jpg" 
+ -- "a old street named Gamura-Stan"] [],FSCrumb "root" [File "KOHH.mp3" "After all, my local!!",File "TheSmiths.mp3" "Queen is Dead"]
+ --  [File "secret.doc" "xxxxxxxxxx",Folder "programs" 
+ -- [File "model.py" "def main(): df_train, df_test = load.data() if __name__ == '__main__': main()",File "index.js" "console.log('hoge')",
+ -- File "not_a_virus.exe" "really not a virus",Folder "haskell" [File "best_hs_prog.hs" "main = print (fix error)",File "random.hs" "main = print 4"]]]])
+
+{-
+    こうすれば nextFocus は File "Oslo.png" "love your coffee" に注目しているはず。
+    では今度は上に行って、近所のファイル "Stockholm.jpg" を見てみよう。
+-}
+
+nextFocus2 :: FSZipper
+nextFocus2 = nextFocus -: fsUp -: fsTo "Stockholm.jpg"
+    -- (File "Stockholm.jpg" "a old street named Gamura-Stan",[FSCrumb "pics" [File "Copenhagen.jpg" "the town with water"] 
+    -- [File "Oslo.png" "love your coffee"],FSCrumb "root" [File "KOHH.mp3" "After all, my local!!",File "TheSmiths.mp3" "Queen is Dead"]
+    -- [File "secret.doc" "xxxxxxxxxx",Folder "programs" [File "model.py" "def main(): df_train, df_test = load.data() if __name__ == '__main__': main()",
+    --    File "index.js" "console.log('hoge')",File "not_a_virus.exe" "really not a virus",
+    -- Folder "haskell" [File "best_hs_prog.hs" "main = print (fix error)",File "random.hs" "main = print 4"]]]])
+
+--- ¶　ファイルシステムの操作
+{-
+    ファイルシステムの中を移動できるようになった今となっては、ファイルシステムを操作するのも朝飯前。
+    まずは、注目しているファイルもしくはフォルダの名前を変更する関数↓
+-}
+fsRename :: Name -> FSZipper -> FSZipper
+fsRename newName (Folder _ items, bs) = (Folder newName items, bs) -- _ は変更前の名前
+fsRename newName (File _ dat, bs) = (File newName dat, bs) -- _ は変更前の名前
+
+{-
+    さっそく "pics" フォルダの名前を "photos" にしてみよう。
+-}
+
+neoFocus :: FSZipper
+neoFocus = (myDisk, []) -: fsTo "pics" -: fsRename "photos" -: fsUp
+    -- (Folder "root" [File "KOHH.mp3" "After all, my local!!",File "TheSmiths.mp3" "Queen is Dead",Folder "photos" [File "Copenhagen.jpg" "the town with water",File "Stockholm.jpg" "a old street named Gamura-Stan",File "Oslo.png" "love your coffee"],File "secret.doc" "xxxxxxxxxx",Folder "programs" [File "model.py" "def main(): df_train, df_test = load.data() if __name__ == '__main__': main()",File "index.js" "console.log('hoge')",File "not_a_virus.exe" "really not a virus",Folder "haskell" [File "best_hs_prog.hs" "main = print (fix error)",File "random.hs" "main = print 4"]]],[])
+
+{-
+    "pics" フォルダまで降りて行って、名前を変え、再び上まで登った。では、現在のフォルダにアイテムを新規作成する関数は？以下のとおり。
+-}
+
+fsNewFile :: FSItem -> FSZipper -> FSZipper
+fsNewFile item (Folder folderName items, bs) = (Folder folderName (item:items), bs)
+fsNewFile _ (File _ _, _) = error "cannot use"
+
+{-
+    簡単！ただし、この関数はフォルダでなくファイルに注目しているジッパーに使うとクラッシュする（パターンマッチの 2 行目）。
+    では "pics" フォルダにファイルを追加して、ルートまで戻ってみよう。
+-}
+
+novaFocus :: FSZipper
+novaFocus = (myDisk, []) -: fsTo "pics" -: fsNewFile (File "Roma.jpg" "history and beauty") -: fsUp
+    -- (Folder "root" [File "KOHH.mp3" "After all, my local!!",File "TheSmiths.mp3" "Queen is Dead",Folder "pics" [File "Roma.jpg" "history and beauty",File "Copenhagen.jpg" "the town with water",File "Stockholm.jpg" "a old street named Gamura-Stan",File "Oslo.png" "love your coffee"],File "secret.doc" "xxxxxxxxxx",Folder "programs" [File "model.py" "def main(): df_train, df_test = load.data() if __name__ == '__main__': main()",File "index.js" "console.log('hoge')",File "not_a_virus.exe" "really not a virus",Folder "haskell" [File "best_hs_prog.hs" "main = print (fix error)",File "random.hs" "main = print 4"]]],[])
+
+{-
+    これの何がすごいかというと、ファイルシステムを更新したときに、データ構造自体に修正が上書きされるのでなく、関数から新しいファイルシステム全体が帰ってくることである。
+    この方式なら、古いファイルシステム（この場合は myDisk）にも新しい版（この場合は novaFocus）にも同時にアクセスできる。
+
+    このようにジッパーを使えば、何もしなくてもバージョン管理がついてくる。
+    データ構造を書き換えた後でも、旧バージョンのデータに何の問題もなくアクセスできる。
+    これは何もジッパーに限った話ではなく、Haskell の性質である。
+    Haskell のデータ構造は immutable（一度定義すると変更できないもの）だからである。
+    ところがジッパーがあれば、そんな immutable なデータ構造の中を楽に効率よく移動できるようになり、Haskell のデータ構造の永続性がいよいよ輝きはじめる。
+    （注）それでも自作のデータ構造にいちいちジッパーなんて作ってられないよ、と思っただろうか？→ Data.Generics.Zipepr モジュール！！
+-}
+
+-------------------------------
+--　足下にご注意！
+-------------------------------
+
+{-
+    これまで二分木、リスト、ファイルシステムといったデータ構造のジッパーを作ってきたが、いずれも、足下を確かめずに歩き崖から落ちても気にしないという実装だった。
+    例えば、goLeft 関数は二分木のジッパーを取って左部分木に注目点を移す。
+
+        goLeft :: Zipper a -> Zipper a
+        goLeft (Node x l r, bs) = (l, (LeftCrumb x r):bs)
+
+    でも、今の足場が空の木だったら？　つまり Node ではなく Empty だったら？
+    すると、Node へのパターンマッチは失敗し、部分木を持たない空の木と合致するパターンはないので（テキストでは。↑ではそのパターンマッチも書いてるが結局右辺で error 関数により error を出すようにしてる）、
+    実行時エラーをくらってしまう。
+
+    今までのところは、空の木の左部分木に注目しようとする奴なんていないだろう、そんな部分木なんてないんだし、と想定している。
+    空の木の左部分木に行く処理など意味がわからないし、便宜のために単に無視してきた。
+
+    また、何らかの木のルートにいてパンくずリストが空のときに、さらに上に戻ろうとしたら？　同じエラーが発生するだろう。
+    どうやらジッパーを使っているときは、一歩踏み出すたびにそれが人生最後の一歩になる覚悟がいるようだ。。
+    いかなる移動も、運良く成功するかもしれないが、いつ失敗するかもわからないのである。
+
+    と、これはどこかで聞いたセリフだ、、そうモナドである！　具体的には Maybe モナド、普通の値に失敗の可能性という文脈を追加するモナドである。
+
+    では、Maybe モナドを使って、ジッパーの移動に失敗可能性という文脈を追加しよう。
+    二分木を処理するジッパーをモナディック関数に変えてみよう。
+
+    まず、goLeft と goRight が引き起こす可能性のある失敗をケアしよう。
+    これまで、失敗するかもしれないという性質は、常に関数の返り値に反映されてきた。今回も例外ではない。
+    以下が、失敗の可能性が追加された goLeft と goRight である。
+-}
+
+maybeGoLeft :: Zipper a -> Maybe (Zipper a)
+maybeGoLeft (Node x l r, bs) = Just (l, (LeftCrumb x r): bs)
+maybeGoLeft (Empty, _) = Nothing
+
+maybeGoRight :: Zipper a -> Maybe (Zipper a)
+maybeGoRight (Node x l r, bs) = Just (r, (RightCrumb x l): bs)
+maybeGoRight (Empty, _) = Nothing
+
+{-
+    これで、空の木の部分木を取ろうとしたら Nothing が返るようになった。
+-}
+
+arrived :: Maybe (Zipper a)
+arrived = maybeGoLeft (Empty, []) -- Nothing
+
+arrived' :: Maybe (Zipper Char)
+arrived' = maybeGoLeft (Node 'A' Empty Empty, []) -- Just (Empty,[LeftCrumb 'A' Empty])
+
+{-
+    よさそう！　では、上に行く場合は？　問題が起こるのは、上に行こうとしたときにパンくずが 1 つもない場合、つまりすでにルートにいた場合である。
+    これが、木構造の境界に気をつけていないとエラーを投げる goUp 関数である。
+
+        goUp :: Zipper a -> Zipper a
+        goUp (t, (LeftCrumb x r):bs) = (Node x t r, bs)
+        goUp (t, (RightCrumb x l):bs) = (Node x l t, bs)
+
+    これを、もっと行儀良く失敗（fail gracefully）するようにしよう。
+-}
+
+maybeGoUp :: Zipper a -> Maybe (Zipper a)
+maybeGoUp (t, (LeftCrumb x r):bs) = Just (Node x t r, bs)
+maybeGoUp (t, (RightCrumb x l):bs) = Just (Node x l t, bs)
+maybeGoUp (_, []) = Nothing
+
+{-
+    パンくずがあればそれでよし、新しい注目点を「成功した計算」の文脈に入れて返す。パンくずがなければ失敗を返す。
+    以前は、この関数はジッパーを取ってジッパーを返していたので、こんな感じで連鎖させて木の中を歩き回ることができた。
+
+        (freeTree, []) -: goLeft -: goRight
+
+    ところが今は、Zipper a を返す代わりに Maybe (Zipper a) を返すようになったので、上記のような関数適用では連鎖できなくなった。
+    第 13 章でピエールの綱渡りを扱ったときにも同じ問題にぶつかった。ピエールも、一歩ごとに失敗すsるかもしれない綱渡りを強いられていた。
+    バランス棒の片側に鳥が止まりすぎると落ちてしまうからである。
+
+    その経験を活用できる。関数適用の代わりに >>= を使えば良いのである。
+    >>= は、文脈付きの値（今の場合、Maybe (Zipper a) という失敗する可能性の文脈）を取って関数に食わせつつ、文脈が適切に処理されることを保証してくれる。
+    だから、ピエールがしたように、すべての -: 演算子を >>= で置き換えよう。それだけで再び関数を連鎖できるようになる。
+-}
+
+coolTree :: Tree Int
+coolTree = Node 1 Empty (Node 3 Empty Empty)
+
+afterWalk :: Maybe (Zipper Int)
+afterWalk = return (coolTree, []) >>= maybeGoRight -- Just (Node 3 Empty Empty,[RightCrumb 1 Empty])
+
+afterWalk' :: Maybe (Zipper Int)
+afterWalk' = return (coolTree, []) >>= maybeGoRight >>= maybeGoRight -- Just (Empty,[RightCrumb 3 Empty,RightCrumb 1 Empty])
+
+afterWalk'' :: Maybe (Zipper Int)
+afterWalk'' = return (coolTree, []) >>= maybeGoRight >>= maybeGoRight >>= maybeGoRight -- Nothing
+
+--- >>= を -: との対比で意識的に考えたことがそこまでなかったかも。わかりやすい！
+
+{-
+    まず、左の枝に空の木を持ち右の枝には「2 つの空の木を持つノード」を持つ木 coolTree を作る。
+    ジッパーを Just に包むのには return を使い、それから >>= を使って maybeGoRight 関数に食わせていく。
+    まず右へ 1 歩踏み出すというのは意味がある操作なので、結果は成功。2 歩でも大丈夫。
+    だがこのとき、注目点は空の木になっている。そして右に 3 歩というのは意味の通らない操作である。
+    空の部分木を右に辿ることはできない。これが結果が Nothing になった理由である。
+    こうして、ピエールの綱のしたにあるような安全ネットが我々の木にも付いた！
+
+    > 先ほどのファイルシステムも、存在しないファイルやフォルダに注目しようとするとか、さまざまな要員で失敗する可能性がある。
+    > ファイルシステム操作関数も Maybe モナドを使って fail gracefully するように改造できる。
+-}
